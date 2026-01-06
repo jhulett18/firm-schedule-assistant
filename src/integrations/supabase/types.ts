@@ -1,0 +1,607 @@
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
+
+export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.1"
+  }
+  public: {
+    Tables: {
+      audit_logs: {
+        Row: {
+          action_type: Database["public"]["Enums"]["audit_action"]
+          actor_user_id: string | null
+          created_at: string
+          details_json: Json
+          id: string
+          meeting_id: string | null
+        }
+        Insert: {
+          action_type: Database["public"]["Enums"]["audit_action"]
+          actor_user_id?: string | null
+          created_at?: string
+          details_json?: Json
+          id?: string
+          meeting_id?: string | null
+        }
+        Update: {
+          action_type?: Database["public"]["Enums"]["audit_action"]
+          actor_user_id?: string | null
+          created_at?: string
+          details_json?: Json
+          id?: string
+          meeting_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_actor_user_id_fkey"
+            columns: ["actor_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_logs_meeting_id_fkey"
+            columns: ["meeting_id"]
+            isOneToOne: false
+            referencedRelation: "meetings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      meeting_types: {
+        Row: {
+          active: boolean
+          allowed_location_modes: Database["public"]["Enums"]["allowed_location_modes"]
+          created_at: string
+          id: string
+          name: string
+          title_template: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          allowed_location_modes?: Database["public"]["Enums"]["allowed_location_modes"]
+          created_at?: string
+          id?: string
+          name: string
+          title_template?: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          allowed_location_modes?: Database["public"]["Enums"]["allowed_location_modes"]
+          created_at?: string
+          id?: string
+          name?: string
+          title_template?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      meetings: {
+        Row: {
+          booking_request_id: string | null
+          created_at: string
+          created_by_user_id: string | null
+          duration_minutes: number
+          end_datetime: string | null
+          external_attendees: Json
+          host_attorney_user_id: string | null
+          id: string
+          in_person_location_choice:
+            | Database["public"]["Enums"]["in_person_location"]
+            | null
+          location_mode: Database["public"]["Enums"]["location_mode"]
+          m365_event_id: string | null
+          meeting_type_id: string | null
+          override_mode_used: boolean
+          preferences: Json
+          room_id: string | null
+          search_window_days_used: number
+          start_datetime: string | null
+          status: Database["public"]["Enums"]["meeting_status"]
+          support_user_ids: string[]
+          timezone: string
+          updated_at: string
+          zoom_join_url: string | null
+          zoom_meeting_id: string | null
+        }
+        Insert: {
+          booking_request_id?: string | null
+          created_at?: string
+          created_by_user_id?: string | null
+          duration_minutes?: number
+          end_datetime?: string | null
+          external_attendees?: Json
+          host_attorney_user_id?: string | null
+          id?: string
+          in_person_location_choice?:
+            | Database["public"]["Enums"]["in_person_location"]
+            | null
+          location_mode?: Database["public"]["Enums"]["location_mode"]
+          m365_event_id?: string | null
+          meeting_type_id?: string | null
+          override_mode_used?: boolean
+          preferences?: Json
+          room_id?: string | null
+          search_window_days_used?: number
+          start_datetime?: string | null
+          status?: Database["public"]["Enums"]["meeting_status"]
+          support_user_ids?: string[]
+          timezone?: string
+          updated_at?: string
+          zoom_join_url?: string | null
+          zoom_meeting_id?: string | null
+        }
+        Update: {
+          booking_request_id?: string | null
+          created_at?: string
+          created_by_user_id?: string | null
+          duration_minutes?: number
+          end_datetime?: string | null
+          external_attendees?: Json
+          host_attorney_user_id?: string | null
+          id?: string
+          in_person_location_choice?:
+            | Database["public"]["Enums"]["in_person_location"]
+            | null
+          location_mode?: Database["public"]["Enums"]["location_mode"]
+          m365_event_id?: string | null
+          meeting_type_id?: string | null
+          override_mode_used?: boolean
+          preferences?: Json
+          room_id?: string | null
+          search_window_days_used?: number
+          start_datetime?: string | null
+          status?: Database["public"]["Enums"]["meeting_status"]
+          support_user_ids?: string[]
+          timezone?: string
+          updated_at?: string
+          zoom_join_url?: string | null
+          zoom_meeting_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meetings_created_by_user_id_fkey"
+            columns: ["created_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meetings_host_attorney_user_id_fkey"
+            columns: ["host_attorney_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meetings_meeting_type_id_fkey"
+            columns: ["meeting_type_id"]
+            isOneToOne: false
+            referencedRelation: "meeting_types"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meetings_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pairing_presets: {
+        Row: {
+          active: boolean
+          attorney_user_id: string
+          created_at: string
+          created_by_user_id: string | null
+          id: string
+          meeting_type_id: string | null
+          name: string
+          support_user_ids: string[]
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          attorney_user_id: string
+          created_at?: string
+          created_by_user_id?: string | null
+          id?: string
+          meeting_type_id?: string | null
+          name: string
+          support_user_ids?: string[]
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          attorney_user_id?: string
+          created_at?: string
+          created_by_user_id?: string | null
+          id?: string
+          meeting_type_id?: string | null
+          name?: string
+          support_user_ids?: string[]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pairing_presets_attorney_user_id_fkey"
+            columns: ["attorney_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pairing_presets_created_by_user_id_fkey"
+            columns: ["created_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pairing_presets_meeting_type_id_fkey"
+            columns: ["meeting_type_id"]
+            isOneToOne: false
+            referencedRelation: "meeting_types"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recent_pairings: {
+        Row: {
+          attorney_user_id: string
+          id: string
+          meeting_type_id: string | null
+          support_user_ids: string[]
+          used_at: string
+          user_id: string
+        }
+        Insert: {
+          attorney_user_id: string
+          id?: string
+          meeting_type_id?: string | null
+          support_user_ids?: string[]
+          used_at?: string
+          user_id: string
+        }
+        Update: {
+          attorney_user_id?: string
+          id?: string
+          meeting_type_id?: string | null
+          support_user_ids?: string[]
+          used_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recent_pairings_attorney_user_id_fkey"
+            columns: ["attorney_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recent_pairings_meeting_type_id_fkey"
+            columns: ["meeting_type_id"]
+            isOneToOne: false
+            referencedRelation: "meeting_types"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recent_pairings_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rooms: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          name: string
+          resource_email: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name: string
+          resource_email: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name?: string
+          resource_email?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      users: {
+        Row: {
+          active: boolean
+          auth_user_id: string | null
+          created_at: string
+          default_search_window_days: number
+          email: string
+          id: string
+          max_search_window_days: number
+          name: string
+          role: Database["public"]["Enums"]["user_role"]
+          timezone_default: string
+          updated_at: string
+          weekends_allowed_default: boolean
+          zoom_access_token: string | null
+          zoom_oauth_connected: boolean
+          zoom_refresh_token: string | null
+          zoom_user_id: string | null
+        }
+        Insert: {
+          active?: boolean
+          auth_user_id?: string | null
+          created_at?: string
+          default_search_window_days?: number
+          email: string
+          id?: string
+          max_search_window_days?: number
+          name: string
+          role?: Database["public"]["Enums"]["user_role"]
+          timezone_default?: string
+          updated_at?: string
+          weekends_allowed_default?: boolean
+          zoom_access_token?: string | null
+          zoom_oauth_connected?: boolean
+          zoom_refresh_token?: string | null
+          zoom_user_id?: string | null
+        }
+        Update: {
+          active?: boolean
+          auth_user_id?: string | null
+          created_at?: string
+          default_search_window_days?: number
+          email?: string
+          id?: string
+          max_search_window_days?: number
+          name?: string
+          role?: Database["public"]["Enums"]["user_role"]
+          timezone_default?: string
+          updated_at?: string
+          weekends_allowed_default?: boolean
+          zoom_access_token?: string | null
+          zoom_oauth_connected?: boolean
+          zoom_refresh_token?: string | null
+          zoom_user_id?: string | null
+        }
+        Relationships: []
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      get_current_user_internal_id: { Args: never; Returns: string }
+      has_admin_role: { Args: { _user_id: string }; Returns: boolean }
+    }
+    Enums: {
+      allowed_location_modes: "Zoom" | "InPerson" | "Either"
+      audit_action:
+        | "Created"
+        | "SuggestedSlots"
+        | "Booked"
+        | "Rescheduled"
+        | "Cancelled"
+        | "OverrideChange"
+        | "SettingsChange"
+        | "Failed"
+      in_person_location: "RoomA" | "RoomB" | "AttorneyOffice"
+      location_mode: "Zoom" | "InPerson"
+      meeting_status:
+        | "Draft"
+        | "Proposed"
+        | "Booked"
+        | "Rescheduled"
+        | "Cancelled"
+        | "Failed"
+      time_of_day_preference:
+        | "Morning"
+        | "Midday"
+        | "Afternoon"
+        | "Evening"
+        | "None"
+      user_role: "Attorney" | "SupportStaff" | "Admin"
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
+}
+
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+
+export type Tables<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      Row: infer R
+    }
+    ? R
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
+
+export type TablesInsert<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Insert: infer I
+    }
+    ? I
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
+
+export type TablesUpdate<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Update: infer U
+    }
+    ? U
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
+
+export type Enums<
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never = never,
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
+
+export type CompositeTypes<
+  PublicCompositeTypeNameOrOptions extends
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never = never,
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
+
+export const Constants = {
+  public: {
+    Enums: {
+      allowed_location_modes: ["Zoom", "InPerson", "Either"],
+      audit_action: [
+        "Created",
+        "SuggestedSlots",
+        "Booked",
+        "Rescheduled",
+        "Cancelled",
+        "OverrideChange",
+        "SettingsChange",
+        "Failed",
+      ],
+      in_person_location: ["RoomA", "RoomB", "AttorneyOffice"],
+      location_mode: ["Zoom", "InPerson"],
+      meeting_status: [
+        "Draft",
+        "Proposed",
+        "Booked",
+        "Rescheduled",
+        "Cancelled",
+        "Failed",
+      ],
+      time_of_day_preference: [
+        "Morning",
+        "Midday",
+        "Afternoon",
+        "Evening",
+        "None",
+      ],
+      user_role: ["Attorney", "SupportStaff", "Admin"],
+    },
+  },
+} as const
