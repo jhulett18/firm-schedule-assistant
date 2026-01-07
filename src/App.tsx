@@ -5,7 +5,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AdminRoute } from "@/components/admin/AdminRoute";
+import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import Index from "./pages/Index";
+import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import PublicBooking from "./pages/PublicBooking";
@@ -31,9 +33,10 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
-            <Route path="/requests" element={<Requests />} />
-            <Route path="/requests/new" element={<RequestNew />} />
-            <Route path="/help" element={<Help />} />
+            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+            <Route path="/requests" element={<ProtectedRoute><Requests /></ProtectedRoute>} />
+            <Route path="/requests/new" element={<ProtectedRoute><RequestNew /></ProtectedRoute>} />
+            <Route path="/help" element={<ProtectedRoute><Help /></ProtectedRoute>} />
             <Route path="/r/:token" element={<PublicBooking />} />
             <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />
             <Route path="/admin/rooms" element={<AdminRoute><AdminRooms /></AdminRoute>} />

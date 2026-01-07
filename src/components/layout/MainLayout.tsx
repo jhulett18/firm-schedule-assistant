@@ -24,7 +24,7 @@ interface MainLayoutProps {
 }
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: Home },
+  { href: "/dashboard", label: "Dashboard", icon: Home },
   { href: "/requests", label: "Booking Requests", icon: FileText },
   { href: "/help", label: "Help", icon: HelpCircle },
 ];
@@ -64,7 +64,7 @@ export function MainLayout({ children }: MainLayoutProps) {
       {/* Header */}
       <header className="flex-shrink-0 h-16 border-b bg-card flex items-center justify-between px-4 shadow-subtle">
         <div className="flex items-center gap-4">
-          <Link to="/" className="flex items-center gap-3">
+          <Link to="/dashboard" className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg gradient-primary flex items-center justify-center">
               <Scale className="w-5 h-5 text-primary-foreground" />
             </div>
