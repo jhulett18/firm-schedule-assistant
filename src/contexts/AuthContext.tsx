@@ -44,6 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isClient, setIsClient] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'staff' | 'client' | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
 
   const fetchInternalUser = async (userId: string) => {
     try {
@@ -75,6 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Error fetching user roles:', error);
         return [];
       }
+      console.log('Fetched roles for user:', userId, data);
       return data?.map(r => r.role) || [];
     } catch (err) {
       console.error('Error in fetchUserRoles:', err);
@@ -83,6 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateRoleState = (roles: string[]) => {
+    console.log('Updating role state with:', roles);
     const hasAdmin = roles.includes('admin');
     const hasStaff = roles.includes('staff');
     const hasClient = roles.includes('client');
@@ -103,20 +106,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const loadUserData = async (authUser: User) => {
+    const [internal, roles] = await Promise.all([
+      fetchInternalUser(authUser.id),
+      fetchUserRoles(authUser.id)
+    ]);
+    setInternalUser(internal);
+    updateRoleState(roles);
+  };
+
   useEffect(() => {
+    let mounted = true;
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        if (!mounted) return;
+        
         setSession(session);
         setUser(session?.user ?? null);
 
         if (session?.user) {
+          // Defer to avoid Supabase deadlock
           setTimeout(async () => {
-            const [internal, roles] = await Promise.all([
-              fetchInternalUser(session.user.id),
-              fetchUserRoles(session.user.id)
-            ]);
-            setInternalUser(internal);
-            updateRoleState(roles);
+            if (!mounted) return;
+            await loadUserData(session.user);
             setIsLoading(false);
           }, 0);
         } else {
@@ -130,25 +143,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     );
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Initial session check
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!mounted) return;
+      
       setSession(session);
       setUser(session?.user ?? null);
 
       if (session?.user) {
-        Promise.all([
-          fetchInternalUser(session.user.id),
-          fetchUserRoles(session.user.id)
-        ]).then(([internal, roles]) => {
-          setInternalUser(internal);
-          updateRoleState(roles);
-          setIsLoading(false);
-        });
-      } else {
-        setIsLoading(false);
+        await loadUserData(session.user);
       }
+      
+      setInitialLoadDone(true);
+      setIsLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {
