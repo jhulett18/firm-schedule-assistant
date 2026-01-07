@@ -171,7 +171,16 @@ export default function AuthPage() {
               {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
             </button>
             
-            <div className="pt-2 border-t border-muted">
+            <div className="pt-2 border-t border-muted space-y-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate('/access')}
+                className="text-xs w-full"
+              >
+                I have a scheduling code
+              </Button>
               <Button
                 type="button"
                 variant="outline"

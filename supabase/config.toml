@@ -20,3 +20,9 @@ verify_jwt = false
 
 [functions.lawmatics-oauth-callback]
 verify_jwt = false
+
+[functions.public-booking-info]
+verify_jwt = false
+
+[functions.public-available-slots]
+verify_jwt = false
