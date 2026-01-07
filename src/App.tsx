@@ -35,18 +35,95 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
-            <Route path="/client" element={<ClientRoute><ClientHome /></ClientRoute>} />
-            <Route path="/dashboard" element={<StaffRoute><Dashboard /></StaffRoute>} />
-            <Route path="/requests" element={<StaffRoute><Requests /></StaffRoute>} />
-            <Route path="/requests/new" element={<StaffRoute><RequestNew /></StaffRoute>} />
-            <Route path="/help" element={<StaffRoute><Help /></StaffRoute>} />
+            <Route
+              path="/dashboard"
+              element={
+                <StaffRoute>
+                  <Dashboard />
+                </StaffRoute>
+              }
+            />
+            <Route
+              path="/client"
+              element={
+                <ClientRoute>
+                  <ClientHome />
+                </ClientRoute>
+              }
+            />
+            <Route
+              path="/requests"
+              element={
+                <StaffRoute>
+                  <Requests />
+                </StaffRoute>
+              }
+            />
+            <Route
+              path="/requests/new"
+              element={
+                <StaffRoute>
+                  <RequestNew />
+                </StaffRoute>
+              }
+            />
+            <Route
+              path="/help"
+              element={
+                <StaffRoute>
+                  <Help />
+                </StaffRoute>
+              }
+            />
             <Route path="/r/:token" element={<PublicBooking />} />
-            <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />
-            <Route path="/admin/rooms" element={<AdminRoute><AdminRooms /></AdminRoute>} />
-            <Route path="/admin/meeting-types" element={<AdminRoute><AdminMeetingTypes /></AdminRoute>} />
-            <Route path="/admin/presets" element={<AdminRoute><AdminPresets /></AdminRoute>} />
-            <Route path="/admin/scheduler-mapping" element={<AdminRoute><AdminSchedulerMapping /></AdminRoute>} />
-            <Route path="/admin/settings" element={<AdminRoute><AdminSettings /></AdminRoute>} />
+            <Route
+              path="/admin/users"
+              element={
+                <AdminRoute>
+                  <AdminUsers />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/rooms"
+              element={
+                <AdminRoute>
+                  <AdminRooms />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/meeting-types"
+              element={
+                <AdminRoute>
+                  <AdminMeetingTypes />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/presets"
+              element={
+                <AdminRoute>
+                  <AdminPresets />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/scheduler-mapping"
+              element={
+                <AdminRoute>
+                  <AdminSchedulerMapping />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/settings"
+              element={
+                <AdminRoute>
+                  <AdminSettings />
+                </AdminRoute>
+              }
+            />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
