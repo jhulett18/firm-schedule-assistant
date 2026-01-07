@@ -91,6 +91,53 @@ export type Database = {
           },
         ]
       }
+      calendar_connections: {
+        Row: {
+          access_token: string
+          created_at: string
+          id: string
+          provider: Database["public"]["Enums"]["calendar_provider"]
+          refresh_token: string | null
+          resource_email: string | null
+          scopes: string[] | null
+          token_expires_at: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          access_token: string
+          created_at?: string
+          id?: string
+          provider: Database["public"]["Enums"]["calendar_provider"]
+          refresh_token?: string | null
+          resource_email?: string | null
+          scopes?: string[] | null
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          access_token?: string
+          created_at?: string
+          id?: string
+          provider?: Database["public"]["Enums"]["calendar_provider"]
+          refresh_token?: string | null
+          resource_email?: string | null
+          scopes?: string[] | null
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calendar_connections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_types: {
         Row: {
           active: boolean
@@ -530,6 +577,7 @@ export type Database = {
         | "SettingsChange"
         | "Failed"
       booking_request_status: "Open" | "Completed" | "Expired"
+      calendar_provider: "google" | "microsoft"
       in_person_location: "RoomA" | "RoomB" | "AttorneyOffice"
       location_mode: "Zoom" | "InPerson"
       meeting_status:
@@ -685,6 +733,7 @@ export const Constants = {
         "Failed",
       ],
       booking_request_status: ["Open", "Completed", "Expired"],
+      calendar_provider: ["google", "microsoft"],
       in_person_location: ["RoomA", "RoomB", "AttorneyOffice"],
       location_mode: ["Zoom", "InPerson"],
       meeting_status: [
