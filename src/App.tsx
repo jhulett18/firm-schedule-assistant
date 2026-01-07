@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AdminRoute } from "@/components/admin/AdminRoute";
 import { StaffRoute } from "@/components/auth/StaffRoute";
+import { ClientRoute } from "@/components/auth/ClientRoute";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
@@ -14,6 +15,7 @@ import PublicBooking from "./pages/PublicBooking";
 import Requests from "./pages/Requests";
 import RequestNew from "./pages/RequestNew";
 import Help from "./pages/Help";
+import ClientHome from "./pages/ClientHome";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminRooms from "./pages/admin/AdminRooms";
 import AdminMeetingTypes from "./pages/admin/AdminMeetingTypes";
@@ -33,6 +35,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
+            {/* Staff/Admin routes */}
             <Route
               path="/dashboard"
               element={
@@ -63,6 +66,15 @@ const App = () => (
                 <StaffRoute>
                   <Help />
                 </StaffRoute>
+              }
+            />
+            {/* Client portal route */}
+            <Route
+              path="/client"
+              element={
+                <ClientRoute>
+                  <ClientHome />
+                </ClientRoute>
               }
             />
             {/* Public booking routes - no auth required */}

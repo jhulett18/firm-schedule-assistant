@@ -1,14 +1,14 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 
 interface StaffRouteProps {
   children: React.ReactNode;
 }
 
 export function StaffRoute({ children }: StaffRouteProps) {
-  const { user, isLoading, rolesLoaded, isAdmin, isStaff, isDevMode } = useAuth();
+  const { user, isLoading, rolesLoaded, isAdmin, isStaff, isClient, isDevMode } = useAuth();
   const { toast } = useToast();
   const hasShownErrorRef = useRef(false);
 
@@ -31,12 +31,20 @@ export function StaffRoute({ children }: StaffRouteProps) {
     return <>{children}</>;
   }
 
-  // User exists, roles loaded, but not admin or staff
-  if (rolesLoaded && !isAdmin && !isStaff) {
-    // Show error toast once
+  // Client trying to access staff pages -> redirect to client portal
+  if (rolesLoaded && isClient) {
+    return <Navigate to="/client" replace />;
+  }
+
+  // User exists, roles loaded, is admin or staff -> allow
+  if (rolesLoaded && (isAdmin || isStaff)) {
+    return <>{children}</>;
+  }
+
+  // User exists, roles loaded, but no valid role
+  if (rolesLoaded && !isAdmin && !isStaff && !isClient) {
     if (!hasShownErrorRef.current) {
       hasShownErrorRef.current = true;
-      // Use setTimeout to avoid state update during render
       setTimeout(() => {
         toast({
           title: 'Access Denied',

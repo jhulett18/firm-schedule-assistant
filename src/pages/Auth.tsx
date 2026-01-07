@@ -24,21 +24,25 @@ export default function AuthPage() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const { user, isLoading: authLoading, rolesLoaded, isAdmin, isStaff, signIn, signUp, enableDevMode } = useAuth();
+  const { user, isLoading: authLoading, rolesLoaded, userRole, isAdmin, isStaff, isClient, signIn, signUp, enableDevMode } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Redirect authenticated users to dashboard
+  // Redirect authenticated users based on role
   useEffect(() => {
     // Wait for both auth and roles to be loaded
     if (authLoading || (user && !rolesLoaded)) {
       return;
     }
     
-    if (user && rolesLoaded && (isAdmin || isStaff)) {
-      navigate('/dashboard', { replace: true });
+    if (user && rolesLoaded) {
+      if (isClient) {
+        navigate('/client', { replace: true });
+      } else if (isAdmin || isStaff) {
+        navigate('/dashboard', { replace: true });
+      }
     }
-  }, [user, authLoading, rolesLoaded, isAdmin, isStaff, navigate]);
+  }, [user, authLoading, rolesLoaded, isAdmin, isStaff, isClient, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
