@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Users, DoorOpen, Calendar, Link2, Map } from "lucide-react";
+import { Users, DoorOpen, Calendar, Link2, Map, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AdminLayoutProps {
@@ -13,6 +13,7 @@ const navItems = [
   { href: "/admin/meeting-types", label: "Meeting Types", icon: Calendar },
   { href: "/admin/presets", label: "Pairing Presets", icon: Link2 },
   { href: "/admin/scheduler-mapping", label: "Scheduler Mapping", icon: Map },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
 export function AdminLayout({ children }: AdminLayoutProps) {

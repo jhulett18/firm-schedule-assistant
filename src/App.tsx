@@ -14,6 +14,7 @@ import AdminRooms from "./pages/admin/AdminRooms";
 import AdminMeetingTypes from "./pages/admin/AdminMeetingTypes";
 import AdminPresets from "./pages/admin/AdminPresets";
 import AdminSchedulerMapping from "./pages/admin/AdminSchedulerMapping";
+import AdminSettings from "./pages/admin/AdminSettings";
 
 const queryClient = new QueryClient();
 
@@ -33,6 +34,7 @@ const App = () => (
             <Route path="/admin/meeting-types" element={<AdminRoute><AdminMeetingTypes /></AdminRoute>} />
             <Route path="/admin/presets" element={<AdminRoute><AdminPresets /></AdminRoute>} />
             <Route path="/admin/scheduler-mapping" element={<AdminRoute><AdminSchedulerMapping /></AdminRoute>} />
+            <Route path="/admin/settings" element={<AdminRoute><AdminSettings /></AdminRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

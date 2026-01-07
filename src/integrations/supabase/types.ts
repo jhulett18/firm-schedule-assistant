@@ -138,6 +138,38 @@ export type Database = {
           },
         ]
       }
+      lawmatics_connections: {
+        Row: {
+          access_token: string
+          connected_at: string | null
+          connected_by_user_id: string | null
+          id: string
+          updated_at: string | null
+        }
+        Insert: {
+          access_token: string
+          connected_at?: string | null
+          connected_by_user_id?: string | null
+          id?: string
+          updated_at?: string | null
+        }
+        Update: {
+          access_token?: string
+          connected_at?: string | null
+          connected_by_user_id?: string | null
+          id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lawmatics_connections_connected_by_user_id_fkey"
+            columns: ["connected_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_types: {
         Row: {
           active: boolean
