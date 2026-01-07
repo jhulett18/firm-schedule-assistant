@@ -28,7 +28,7 @@ export default function AuthPage() {
   const [name, setName] = useState('');
   const [accountType, setAccountType] = useState<AccountType>('client');
   const [isLoading, setIsLoading] = useState(false);
-  const { user, isLoading: authLoading, isAdmin, isStaff, signIn, signUp } = useAuth();
+  const { user, isLoading: authLoading, isAdmin, isStaff, signIn, signUp, enableDevMode } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -226,7 +226,10 @@ export default function AuthPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => navigate('/dashboard')}
+                onClick={() => {
+                  enableDevMode();
+                  navigate('/dashboard');
+                }}
                 className="text-xs"
               >
                 Skip Login (Dev Mode)
