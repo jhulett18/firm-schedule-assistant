@@ -212,7 +212,7 @@ export default function AuthPage() {
             </Button>
           </form>
 
-          <div className="mt-6 text-center">
+          <div className="mt-6 text-center space-y-3">
             <button
               type="button"
               onClick={() => setIsLogin(!isLogin)}
@@ -220,6 +220,18 @@ export default function AuthPage() {
             >
               {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
             </button>
+            
+            <div className="pt-2 border-t border-muted">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => navigate('/dashboard')}
+                className="text-xs"
+              >
+                Skip Login (Dev Mode)
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
