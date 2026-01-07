@@ -90,20 +90,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const hasStaff = roles.includes('staff');
     const hasClient = roles.includes('client');
 
-    setIsAdmin(hasAdmin);
-    setIsStaff(hasAdmin || hasStaff); // Admins are also considered staff
-    setIsClient(hasClient && !hasAdmin && !hasStaff);
-
-    // Determine primary role (admin > staff > client)
+    // Batch all state updates together
+    const computedIsAdmin = hasAdmin;
+    const computedIsStaff = hasAdmin || hasStaff;
+    const computedIsClient = hasClient && !hasAdmin && !hasStaff;
+    
+    let computedRole: 'admin' | 'staff' | 'client' | null = null;
     if (hasAdmin) {
-      setUserRole('admin');
+      computedRole = 'admin';
     } else if (hasStaff) {
-      setUserRole('staff');
+      computedRole = 'staff';
     } else if (hasClient) {
-      setUserRole('client');
-    } else {
-      setUserRole(null);
+      computedRole = 'client';
     }
+
+    console.log('Computed roles - isAdmin:', computedIsAdmin, 'isStaff:', computedIsStaff, 'userRole:', computedRole);
+
+    setIsAdmin(computedIsAdmin);
+    setIsStaff(computedIsStaff);
+    setIsClient(computedIsClient);
+    setUserRole(computedRole);
   };
 
   const loadUserData = async (authUser: User) => {
