@@ -35,7 +35,6 @@ serve(async (req) => {
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const LAWMATICS_WEBHOOK_URL = Deno.env.get("LAWMATICS_WEBHOOK_URL");
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -133,60 +132,72 @@ serve(async (req) => {
       // Non-fatal, continue
     }
 
-    // 5. Call Lawmatics webhook (or Zapier webhook for MVP)
+    // 5. Create appointment in Lawmatics via direct API
     let lawmaticsAppointmentId: string | null = null;
     let lawmaticsError: string | null = null;
 
-    if (LAWMATICS_WEBHOOK_URL) {
+    // Fetch Lawmatics connection
+    const { data: lawmaticsConnection } = await supabase
+      .from("lawmatics_connections")
+      .select("access_token")
+      .order("connected_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lawmaticsConnection?.access_token) {
       try {
-        const webhookPayload = {
-          appointment: {
-            meeting_id: meeting.id,
-            start_datetime: startDatetime,
-            end_datetime: endDatetime,
-            duration_minutes: meeting.duration_minutes,
-            timezone: meeting.timezone,
-            location_mode: meeting.location_mode,
-            location_name: meeting.location_mode === "InPerson" 
-              ? (meeting.rooms?.name || meeting.in_person_location_choice)
-              : "Zoom",
-            meeting_type: meeting.meeting_types?.name || "Meeting",
-          },
-          host_attorney: hostAttorney ? {
-            name: hostAttorney.name,
-            email: hostAttorney.email,
-          } : null,
-          client: meeting.external_attendees?.[0] || null,
-          created_at: new Date().toISOString(),
+        const client = meeting.external_attendees?.[0];
+        const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+        
+        // Build description
+        const descriptionParts = [
+          `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
+          `Duration: ${meeting.duration_minutes} minutes`,
+          `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || meeting.in_person_location_choice || "In Person") : "Zoom"}`,
+          hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
+          client?.name ? `Client: ${client.name}` : null,
+          client?.email ? `Client Email: ${client.email}` : null,
+          client?.phone ? `Client Phone: ${client.phone}` : null,
+        ].filter(Boolean).join("\n");
+
+        const lawmaticsPayload = {
+          name: eventName,
+          starts_at: startDatetime,
+          ends_at: endDatetime,
+          description: descriptionParts,
         };
 
-        console.log("Calling Lawmatics webhook with payload:", JSON.stringify(webhookPayload));
+        console.log("Creating Lawmatics event:", JSON.stringify(lawmaticsPayload));
 
-        const webhookResponse = await fetch(LAWMATICS_WEBHOOK_URL, {
+        const lawmaticsResponse = await fetch("https://api.lawmatics.com/v1/events", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(webhookPayload),
+          headers: {
+            "Authorization": `Bearer ${lawmaticsConnection.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(lawmaticsPayload),
         });
 
-        if (webhookResponse.ok) {
-          const responseData = await webhookResponse.json().catch(() => ({}));
-          lawmaticsAppointmentId = responseData.appointment_id || responseData.id || null;
-          console.log("Lawmatics webhook success, appointment ID:", lawmaticsAppointmentId);
+        if (lawmaticsResponse.ok) {
+          const responseData = await lawmaticsResponse.json();
+          lawmaticsAppointmentId = responseData.data?.id || responseData.id || null;
+          console.log("Lawmatics event created, ID:", lawmaticsAppointmentId);
         } else {
-          const errorText = await webhookResponse.text();
-          lawmaticsError = `Lawmatics webhook failed: ${webhookResponse.status} - ${errorText}`;
+          const errorText = await lawmaticsResponse.text();
+          lawmaticsError = `Lawmatics API error: ${lawmaticsResponse.status} - ${errorText}`;
           console.error(lawmaticsError);
         }
       } catch (err) {
-        lawmaticsError = `Lawmatics webhook error: ${err instanceof Error ? err.message : String(err)}`;
+        lawmaticsError = `Lawmatics API error: ${err instanceof Error ? err.message : String(err)}`;
         console.error(lawmaticsError);
       }
     } else {
-      console.log("No LAWMATICS_WEBHOOK_URL configured, skipping external integration");
+      console.log("No Lawmatics connection configured, skipping external integration");
     }
 
     // 6. Handle Lawmatics result
-    if (lawmaticsError) {
+    if (lawmaticsError && lawmaticsConnection) {
+      // Only fail if we had a connection but the API call failed
       // Set meeting status to Failed
       await supabase
         .from("meetings")
@@ -228,11 +239,9 @@ serve(async (req) => {
 
     // 8. Log success audit
     await supabase.from("audit_logs").insert({
-      action_type: "StatusChange",
+      action_type: "Booked",
       meeting_id: meeting.id,
       details_json: {
-        old_status: "Draft",
-        new_status: "Booked",
         booked_at: new Date().toISOString(),
         start_datetime: startDatetime,
         end_datetime: endDatetime,
