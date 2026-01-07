@@ -13,12 +13,12 @@ serve(async (req) => {
 
     if (error) {
       console.error("OAuth error from Google:", error);
-      return Response.redirect(`${appUrl}/admin/calendar?error=${error}`, 302);
+      return Response.redirect(`${appUrl}/admin/settings?google_error=${error}#calendar`, 302);
     }
 
     if (!code || !state) {
       console.error("Missing code or state");
-      return Response.redirect(`${appUrl}/admin/calendar?error=missing_params`, 302);
+      return Response.redirect(`${appUrl}/admin/settings?google_error=missing_params#calendar`, 302);
     }
 
     // Decode state to get user ID
@@ -27,13 +27,13 @@ serve(async (req) => {
       stateData = JSON.parse(atob(state));
     } catch {
       console.error("Invalid state parameter");
-      return Response.redirect(`${appUrl}/admin/calendar?error=invalid_state`, 302);
+      return Response.redirect(`${appUrl}/admin/settings?google_error=invalid_state#calendar`, 302);
     }
 
     // Check state timestamp (5 minute expiry)
     if (Date.now() - stateData.timestamp > 5 * 60 * 1000) {
       console.error("State expired");
-      return Response.redirect(`${appUrl}/admin/calendar?error=state_expired`, 302);
+      return Response.redirect(`${appUrl}/admin/settings?google_error=state_expired#calendar`, 302);
     }
 
     const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
@@ -43,7 +43,7 @@ serve(async (req) => {
 
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
       console.error("Missing Google OAuth credentials");
-      return Response.redirect(`${appUrl}/admin/calendar?error=config_error`, 302);
+      return Response.redirect(`${appUrl}/admin/settings?google_error=config_error#calendar`, 302);
     }
 
     const redirectUri = `${SUPABASE_URL}/functions/v1/google-oauth-callback`;
@@ -64,7 +64,7 @@ serve(async (req) => {
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error("Token exchange failed:", errorText);
-      return Response.redirect(`${appUrl}/admin/calendar?error=token_exchange_failed`, 302);
+      return Response.redirect(`${appUrl}/admin/settings?google_error=token_exchange_failed#calendar`, 302);
     }
 
     const tokens = await tokenResponse.json();
@@ -99,7 +99,7 @@ serve(async (req) => {
 
       if (updateError) {
         console.error("Failed to update connection:", updateError);
-        return Response.redirect(`${appUrl}/admin/calendar?error=db_error`, 302);
+        return Response.redirect(`${appUrl}/admin/settings?google_error=db_error#calendar`, 302);
       }
     } else {
       // Insert new connection
@@ -116,15 +116,15 @@ serve(async (req) => {
 
       if (insertError) {
         console.error("Failed to insert connection:", insertError);
-        return Response.redirect(`${appUrl}/admin/calendar?error=db_error`, 302);
+        return Response.redirect(`${appUrl}/admin/settings?google_error=db_error#calendar`, 302);
       }
     }
 
     console.log("Calendar connection saved for user:", stateData.userId);
-    return Response.redirect(`${appUrl}/admin/calendar?success=true`, 302);
+    return Response.redirect(`${appUrl}/admin/settings?google_success=true#calendar`, 302);
   } catch (error) {
     console.error("Error in google-oauth-callback:", error);
     const appUrl = Deno.env.get("APP_URL") || "https://lovable.dev";
-    return Response.redirect(`${appUrl}/admin/calendar?error=unknown`, 302);
+    return Response.redirect(`${appUrl}/admin/settings?google_error=unknown#calendar`, 302);
   }
 });

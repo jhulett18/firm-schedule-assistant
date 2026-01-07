@@ -120,6 +120,10 @@ export type Database = {
           access_token: string
           created_at: string
           id: string
+          last_calendar_list_count: number | null
+          last_verified_at: string | null
+          last_verified_error: string | null
+          last_verified_ok: boolean | null
           provider: Database["public"]["Enums"]["calendar_provider"]
           refresh_token: string | null
           resource_email: string | null
@@ -132,6 +136,10 @@ export type Database = {
           access_token: string
           created_at?: string
           id?: string
+          last_calendar_list_count?: number | null
+          last_verified_at?: string | null
+          last_verified_error?: string | null
+          last_verified_ok?: boolean | null
           provider: Database["public"]["Enums"]["calendar_provider"]
           refresh_token?: string | null
           resource_email?: string | null
@@ -144,6 +152,10 @@ export type Database = {
           access_token?: string
           created_at?: string
           id?: string
+          last_calendar_list_count?: number | null
+          last_verified_at?: string | null
+          last_verified_error?: string | null
+          last_verified_ok?: boolean | null
           provider?: Database["public"]["Enums"]["calendar_provider"]
           refresh_token?: string | null
           resource_email?: string | null

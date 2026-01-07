@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { AdminLayout } from "@/components/admin/AdminLayout";
+import { GoogleCalendarConnections } from "@/components/admin/GoogleCalendarConnections";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,18 +27,28 @@ const AdminSettings = () => {
 
   // Handle OAuth callback results
   useEffect(() => {
-    const success = searchParams.get("lawmatics_success");
-    const error = searchParams.get("lawmatics_error");
+    const lawmaticsSuccess = searchParams.get("lawmatics_success");
+    const lawmaticsError = searchParams.get("lawmatics_error");
+    const googleSuccess = searchParams.get("google_success");
+    const googleError = searchParams.get("google_error");
 
-    if (success === "true") {
+    if (lawmaticsSuccess === "true") {
       toast.success("Successfully connected to Lawmatics!");
       queryClient.invalidateQueries({ queryKey: ["lawmatics-connection"] });
-    } else if (error) {
-      toast.error(`Failed to connect to Lawmatics: ${error}`);
+    } else if (lawmaticsError) {
+      toast.error(`Failed to connect to Lawmatics: ${lawmaticsError}`);
+    }
+
+    if (googleSuccess === "true") {
+      toast.success("Successfully connected to Google Calendar!");
+      queryClient.invalidateQueries({ queryKey: ["google-calendar-connections"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-connection-status"] });
+    } else if (googleError) {
+      toast.error(`Failed to connect to Google Calendar: ${googleError}`);
     }
 
     // Clear the query params
-    if (success || error) {
+    if (lawmaticsSuccess || lawmaticsError || googleSuccess || googleError) {
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams, queryClient]);
@@ -317,6 +328,9 @@ const AdminSettings = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* Google Calendar Connections Card */}
+        <GoogleCalendarConnections />
 
         {/* Lawmatics Integration Card */}
         <Card>
