@@ -1,1 +1,13 @@
 project_id = "jgrcjwdvnigxvqvfouga"
+
+[functions.google-oauth-start]
+verify_jwt = false
+
+[functions.google-oauth-callback]
+verify_jwt = false
+
+[functions.refresh-google-token]
+verify_jwt = false
+
+[functions.check-availability]
+verify_jwt = false
