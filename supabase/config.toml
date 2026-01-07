@@ -26,3 +26,9 @@ verify_jwt = false
 
 [functions.public-available-slots]
 verify_jwt = false
+
+[functions.google-connection-status]
+verify_jwt = true
+
+[functions.google-list-calendars]
+verify_jwt = true
