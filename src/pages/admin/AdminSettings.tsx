@@ -8,13 +8,21 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw, Settings2 } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare } from "lucide-react";
 
 const AdminSettings = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [isConnecting, setIsConnecting] = useState(false);
   const queryClient = useQueryClient();
+
+  // Local state for contact fields
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactMessage, setContactMessage] = useState("");
+  const [hasContactChanges, setHasContactChanges] = useState(false);
 
   // Handle OAuth callback results
   useEffect(() => {
@@ -63,9 +71,38 @@ const AdminSettings = () => {
     },
   });
 
+  // Initialize contact fields from settings
+  useEffect(() => {
+    if (appSettings) {
+      const phone = appSettings.find(s => s.key === "public_contact_phone")?.value || "";
+      const email = appSettings.find(s => s.key === "public_contact_email")?.value || "";
+      const message = appSettings.find(s => s.key === "public_contact_message")?.value || "";
+      
+      setContactPhone(phone);
+      setContactEmail(email);
+      setContactMessage(message);
+      setHasContactChanges(false);
+    }
+  }, [appSettings]);
+
+  // Track changes to contact fields
+  useEffect(() => {
+    if (appSettings) {
+      const origPhone = appSettings.find(s => s.key === "public_contact_phone")?.value || "";
+      const origEmail = appSettings.find(s => s.key === "public_contact_email")?.value || "";
+      const origMessage = appSettings.find(s => s.key === "public_contact_message")?.value || "";
+      
+      setHasContactChanges(
+        contactPhone !== origPhone || 
+        contactEmail !== origEmail || 
+        contactMessage !== origMessage
+      );
+    }
+  }, [contactPhone, contactEmail, contactMessage, appSettings]);
+
   const roomReservationMode = appSettings?.find(s => s.key === "room_reservation_mode")?.value || "LawmaticsSync";
 
-  // Update setting mutation
+  // Update setting mutation (for existing settings)
   const updateSettingMutation = useMutation({
     mutationFn: async ({ key, value }: { key: string; value: string }) => {
       const { error } = await supabase
@@ -83,6 +120,55 @@ const AdminSettings = () => {
       toast.error(`Failed to update setting: ${error.message}`);
     },
   });
+
+  // Upsert setting mutation (for settings that may not exist)
+  const upsertSettingMutation = useMutation({
+    mutationFn: async ({ key, value, description }: { key: string; value: string; description?: string }) => {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ 
+          key, 
+          value, 
+          description,
+          updated_at: new Date().toISOString() 
+        }, { 
+          onConflict: "key" 
+        });
+
+      if (error) throw error;
+    },
+    onError: (error) => {
+      toast.error(`Failed to save setting: ${error.message}`);
+    },
+  });
+
+  // Save all contact settings
+  const saveContactSettings = async () => {
+    try {
+      await Promise.all([
+        upsertSettingMutation.mutateAsync({ 
+          key: "public_contact_phone", 
+          value: contactPhone,
+          description: "Phone number displayed on public booking pages"
+        }),
+        upsertSettingMutation.mutateAsync({ 
+          key: "public_contact_email", 
+          value: contactEmail,
+          description: "Email address displayed on public booking pages"
+        }),
+        upsertSettingMutation.mutateAsync({ 
+          key: "public_contact_message", 
+          value: contactMessage,
+          description: "Custom message displayed on public booking pages when clients need help"
+        }),
+      ]);
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+      toast.success("Contact settings saved");
+      setHasContactChanges(false);
+    } catch (error) {
+      // Error already handled in mutation
+    }
+  };
 
   // Connect to Lawmatics
   const connectMutation = useMutation({
@@ -124,6 +210,77 @@ const AdminSettings = () => {
           <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-muted-foreground">Manage integrations and system settings</p>
         </div>
+
+        {/* Public Contact Information Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5" />
+              Public Contact Information
+            </CardTitle>
+            <CardDescription>
+              Contact details shown to clients on public booking pages for help and support
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="contact-phone" className="flex items-center gap-2">
+                  <Phone className="h-4 w-4" />
+                  Phone Number
+                </Label>
+                <Input
+                  id="contact-phone"
+                  type="tel"
+                  placeholder="(555) 123-4567"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="contact-email" className="flex items-center gap-2">
+                  <Mail className="h-4 w-4" />
+                  Email Address
+                </Label>
+                <Input
+                  id="contact-email"
+                  type="email"
+                  placeholder="contact@yourfirm.com"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="contact-message">
+                Custom Help Message (optional)
+              </Label>
+              <Textarea
+                id="contact-message"
+                placeholder="Please contact our office if you need any assistance..."
+                value={contactMessage}
+                onChange={(e) => setContactMessage(e.target.value)}
+                rows={2}
+              />
+              <p className="text-xs text-muted-foreground">
+                This message appears when clients encounter issues or need to reschedule.
+              </p>
+            </div>
+            <Button 
+              onClick={saveContactSettings}
+              disabled={!hasContactChanges || upsertSettingMutation.isPending}
+            >
+              {upsertSettingMutation.isPending ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Contact Settings"
+              )}
+            </Button>
+          </CardContent>
+        </Card>
 
         {/* Feature Flags Card */}
         <Card>
