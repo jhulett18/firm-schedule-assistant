@@ -35,9 +35,8 @@ export function MainLayout({ children }: MainLayoutProps) {
   const navigate = useNavigate();
   const [isChangingRole, setIsChangingRole] = useState(false);
 
-  // Check if current user is "jonathan" (case insensitive match on name or email)
-  const isJonathan = internalUser?.name?.toLowerCase().includes("jonathan") || 
-                     internalUser?.email?.toLowerCase().includes("jonathan");
+  // Check if current user is jonathan@legaleasemarketing.com
+  const isJonathan = internalUser?.email?.toLowerCase() === "jonathan@legaleasemarketing.com";
 
   async function handleRoleChange(newRole: "Attorney" | "SupportStaff" | "Admin") {
     if (!internalUser) return;
