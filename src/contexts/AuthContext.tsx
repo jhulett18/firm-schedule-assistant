@@ -17,14 +17,19 @@ interface InternalUser {
   zoom_user_id: string | null;
 }
 
+type AccountType = 'client' | 'staff';
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   internalUser: InternalUser | null;
   isAdmin: boolean;
+  isStaff: boolean;
+  isClient: boolean;
+  userRole: 'admin' | 'staff' | 'client' | null;
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, name: string) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string, name: string, accountType: AccountType) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -35,6 +40,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [internalUser, setInternalUser] = useState<InternalUser | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isStaff, setIsStaff] = useState(false);
+  const [isClient, setIsClient] = useState(false);
+  const [userRole, setUserRole] = useState<'admin' | 'staff' | 'client' | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchInternalUser = async (userId: string) => {
@@ -56,23 +64,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const checkAdminRole = async (userId: string) => {
+  const fetchUserRoles = async (userId: string) => {
     try {
       const { data, error } = await supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', userId)
-        .eq('role', 'admin')
-        .maybeSingle();
+        .eq('user_id', userId);
 
       if (error) {
-        console.error('Error checking admin role:', error);
-        return false;
+        console.error('Error fetching user roles:', error);
+        return [];
       }
-      return !!data;
+      return data?.map(r => r.role) || [];
     } catch (err) {
-      console.error('Error in checkAdminRole:', err);
-      return false;
+      console.error('Error in fetchUserRoles:', err);
+      return [];
+    }
+  };
+
+  const updateRoleState = (roles: string[]) => {
+    const hasAdmin = roles.includes('admin');
+    const hasStaff = roles.includes('staff');
+    const hasClient = roles.includes('client');
+
+    setIsAdmin(hasAdmin);
+    setIsStaff(hasAdmin || hasStaff); // Admins are also considered staff
+    setIsClient(hasClient && !hasAdmin && !hasStaff);
+
+    // Determine primary role (admin > staff > client)
+    if (hasAdmin) {
+      setUserRole('admin');
+    } else if (hasStaff) {
+      setUserRole('staff');
+    } else if (hasClient) {
+      setUserRole('client');
+    } else {
+      setUserRole(null);
     }
   };
 
@@ -84,15 +111,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (session?.user) {
           setTimeout(async () => {
-            const internal = await fetchInternalUser(session.user.id);
+            const [internal, roles] = await Promise.all([
+              fetchInternalUser(session.user.id),
+              fetchUserRoles(session.user.id)
+            ]);
             setInternalUser(internal);
-            const adminStatus = await checkAdminRole(session.user.id);
-            setIsAdmin(adminStatus);
+            updateRoleState(roles);
             setIsLoading(false);
           }, 0);
         } else {
           setInternalUser(null);
           setIsAdmin(false);
+          setIsStaff(false);
+          setIsClient(false);
+          setUserRole(null);
           setIsLoading(false);
         }
       }
@@ -103,12 +135,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null);
 
       if (session?.user) {
-        fetchInternalUser(session.user.id).then((internal) => {
+        Promise.all([
+          fetchInternalUser(session.user.id),
+          fetchUserRoles(session.user.id)
+        ]).then(([internal, roles]) => {
           setInternalUser(internal);
-          checkAdminRole(session.user.id).then((adminStatus) => {
-            setIsAdmin(adminStatus);
-            setIsLoading(false);
-          });
+          updateRoleState(roles);
+          setIsLoading(false);
         });
       } else {
         setIsLoading(false);
@@ -123,7 +156,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: error as Error | null };
   };
 
-  const signUp = async (email: string, password: string, name: string) => {
+  const signUp = async (email: string, password: string, name: string, accountType: AccountType) => {
     const redirectUrl = `${window.location.origin}/`;
     
     const { data, error } = await supabase.auth.signUp({
@@ -139,17 +172,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: error as Error };
     }
 
-    // Create internal user record
     if (data.user) {
-      const { error: insertError } = await supabase.from('users').insert({
-        auth_user_id: data.user.id,
-        name,
-        email,
-        role: 'SupportStaff' as const,
+      // Insert role into user_roles table
+      const { error: roleError } = await supabase.from('user_roles').insert({
+        user_id: data.user.id,
+        role: accountType,
       });
 
-      if (insertError) {
-        console.error('Error creating internal user:', insertError);
+      if (roleError) {
+        console.error('Error creating user role:', roleError);
+      }
+
+      // Only create internal user record for staff accounts
+      if (accountType === 'staff') {
+        const { error: insertError } = await supabase.from('users').insert({
+          auth_user_id: data.user.id,
+          name,
+          email,
+          role: 'SupportStaff' as const,
+        });
+
+        if (insertError) {
+          console.error('Error creating internal user:', insertError);
+        }
       }
     }
 
@@ -162,6 +207,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     setInternalUser(null);
     setIsAdmin(false);
+    setIsStaff(false);
+    setIsClient(false);
+    setUserRole(null);
   };
 
   return (
@@ -171,6 +219,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         session,
         internalUser,
         isAdmin,
+        isStaff,
+        isClient,
+        userRole,
         isLoading,
         signIn,
         signUp,

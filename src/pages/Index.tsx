@@ -3,18 +3,23 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Index() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, isAdmin, isStaff } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!isLoading) {
       if (user) {
-        navigate("/dashboard", { replace: true });
+        // Route based on role
+        if (isAdmin || isStaff) {
+          navigate("/dashboard", { replace: true });
+        } else {
+          navigate("/client", { replace: true });
+        }
       } else {
         navigate("/auth", { replace: true });
       }
     }
-  }, [user, isLoading, navigate]);
+  }, [user, isLoading, isAdmin, isStaff, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">

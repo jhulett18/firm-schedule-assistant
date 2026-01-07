@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AdminRoute } from "@/components/admin/AdminRoute";
-import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { StaffRoute } from "@/components/auth/StaffRoute";
+import { ClientRoute } from "@/components/auth/ClientRoute";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
@@ -14,6 +15,7 @@ import PublicBooking from "./pages/PublicBooking";
 import Requests from "./pages/Requests";
 import RequestNew from "./pages/RequestNew";
 import Help from "./pages/Help";
+import ClientHome from "./pages/ClientHome";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminRooms from "./pages/admin/AdminRooms";
 import AdminMeetingTypes from "./pages/admin/AdminMeetingTypes";
@@ -33,10 +35,11 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
-            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/requests" element={<ProtectedRoute><Requests /></ProtectedRoute>} />
-            <Route path="/requests/new" element={<ProtectedRoute><RequestNew /></ProtectedRoute>} />
-            <Route path="/help" element={<ProtectedRoute><Help /></ProtectedRoute>} />
+            <Route path="/client" element={<ClientRoute><ClientHome /></ClientRoute>} />
+            <Route path="/dashboard" element={<StaffRoute><Dashboard /></StaffRoute>} />
+            <Route path="/requests" element={<StaffRoute><Requests /></StaffRoute>} />
+            <Route path="/requests/new" element={<StaffRoute><RequestNew /></StaffRoute>} />
+            <Route path="/help" element={<StaffRoute><Help /></StaffRoute>} />
             <Route path="/r/:token" element={<PublicBooking />} />
             <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />
             <Route path="/admin/rooms" element={<AdminRoute><AdminRooms /></AdminRoute>} />

@@ -623,9 +623,18 @@ export type Database = {
     Functions: {
       get_current_user_internal_id: { Args: never; Returns: string }
       has_admin_role: { Args: { _user_id: string }; Returns: boolean }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      has_staff_role: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
       allowed_location_modes: "Zoom" | "InPerson" | "Either"
+      app_role: "admin" | "staff" | "client"
       audit_action:
         | "Created"
         | "SuggestedSlots"
@@ -781,6 +790,7 @@ export const Constants = {
   public: {
     Enums: {
       allowed_location_modes: ["Zoom", "InPerson", "Either"],
+      app_role: ["admin", "staff", "client"],
       audit_action: [
         "Created",
         "SuggestedSlots",
