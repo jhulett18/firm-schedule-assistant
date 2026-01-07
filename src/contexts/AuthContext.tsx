@@ -17,20 +17,18 @@ interface InternalUser {
   zoom_user_id: string | null;
 }
 
-type AccountType = 'client' | 'staff';
-
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   internalUser: InternalUser | null;
   isAdmin: boolean;
   isStaff: boolean;
-  isClient: boolean;
-  userRole: 'admin' | 'staff' | 'client' | null;
+  userRole: 'admin' | 'staff' | null;
   isLoading: boolean;
+  rolesLoaded: boolean;
   isDevMode: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, name: string, accountType: AccountType) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string, name: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   enableDevMode: () => void;
 }
@@ -43,10 +41,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [internalUser, setInternalUser] = useState<InternalUser | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isStaff, setIsStaff] = useState(false);
-  const [isClient, setIsClient] = useState(false);
-  const [userRole, setUserRole] = useState<'admin' | 'staff' | 'client' | null>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'staff' | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [initialLoadDone, setInitialLoadDone] = useState(false);
+  const [rolesLoaded, setRolesLoaded] = useState(false);
   const [isDevMode, setIsDevMode] = useState(false);
 
   const fetchInternalUser = async (userId: string) => {
@@ -91,37 +88,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     console.log('Updating role state with:', roles);
     const hasAdmin = roles.includes('admin');
     const hasStaff = roles.includes('staff');
-    const hasClient = roles.includes('client');
 
-    // Batch all state updates together
+    // Simplified: Only admin and staff roles supported
     const computedIsAdmin = hasAdmin;
     const computedIsStaff = hasAdmin || hasStaff;
-    const computedIsClient = hasClient && !hasAdmin && !hasStaff;
     
-    let computedRole: 'admin' | 'staff' | 'client' | null = null;
+    let computedRole: 'admin' | 'staff' | null = null;
     if (hasAdmin) {
       computedRole = 'admin';
     } else if (hasStaff) {
       computedRole = 'staff';
-    } else if (hasClient) {
-      computedRole = 'client';
     }
 
     console.log('Computed roles - isAdmin:', computedIsAdmin, 'isStaff:', computedIsStaff, 'userRole:', computedRole);
 
     setIsAdmin(computedIsAdmin);
     setIsStaff(computedIsStaff);
-    setIsClient(computedIsClient);
     setUserRole(computedRole);
+    setRolesLoaded(true);
   };
 
   const loadUserData = async (authUser: User) => {
-    const [internal, roles] = await Promise.all([
-      fetchInternalUser(authUser.id),
-      fetchUserRoles(authUser.id)
-    ]);
-    setInternalUser(internal);
-    updateRoleState(roles);
+    try {
+      const [internal, roles] = await Promise.all([
+        fetchInternalUser(authUser.id),
+        fetchUserRoles(authUser.id)
+      ]);
+      setInternalUser(internal);
+      updateRoleState(roles);
+    } catch (err) {
+      console.error('Error loading user data:', err);
+      setRolesLoaded(true); // Mark as loaded even on error to prevent hanging
+    }
+  };
+
+  const resetState = () => {
+    setUser(null);
+    setSession(null);
+    setInternalUser(null);
+    setIsAdmin(false);
+    setIsStaff(false);
+    setUserRole(null);
+    setRolesLoaded(false);
+    setIsDevMode(false);
   };
 
   useEffect(() => {
@@ -131,10 +140,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (event, session) => {
         if (!mounted) return;
         
+        console.log('Auth state change:', event, session?.user?.id);
+        
         setSession(session);
         setUser(session?.user ?? null);
 
         if (session?.user) {
+          // Don't set isLoading false yet - wait for roles to load
           // Defer to avoid Supabase deadlock
           setTimeout(async () => {
             if (!mounted) return;
@@ -142,11 +154,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setIsLoading(false);
           }, 0);
         } else {
-          setInternalUser(null);
-          setIsAdmin(false);
-          setIsStaff(false);
-          setIsClient(false);
-          setUserRole(null);
+          resetState();
           setIsLoading(false);
         }
       }
@@ -156,14 +164,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!mounted) return;
       
+      console.log('Initial session check:', session?.user?.id);
+      
       setSession(session);
       setUser(session?.user ?? null);
 
       if (session?.user) {
         await loadUserData(session.user);
+      } else {
+        setRolesLoaded(true); // No user, but roles are "loaded" (empty)
       }
       
-      setInitialLoadDone(true);
       setIsLoading(false);
     });
 
@@ -174,14 +185,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = async (email: string, password: string) => {
+    setRolesLoaded(false); // Reset roles loaded state
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return { error: error as Error | null };
   };
 
-  const signUp = async (email: string, password: string, name: string, accountType: AccountType) => {
+  // Simplified signup - no account type, triggers handle role assignment
+  const signUp = async (email: string, password: string, name: string) => {
     const redirectUrl = `${window.location.origin}/`;
     
-    const { data, error } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -190,49 +203,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
     });
 
-    if (error) {
-      return { error: error as Error };
-    }
-
-    if (data.user) {
-      // Insert role into user_roles table
-      const { error: roleError } = await supabase.from('user_roles').insert({
-        user_id: data.user.id,
-        role: accountType,
-      });
-
-      if (roleError) {
-        console.error('Error creating user role:', roleError);
-      }
-
-      // Only create internal user record for staff accounts
-      if (accountType === 'staff') {
-        const { error: insertError } = await supabase.from('users').insert({
-          auth_user_id: data.user.id,
-          name,
-          email,
-          role: 'SupportStaff' as const,
-        });
-
-        if (insertError) {
-          console.error('Error creating internal user:', insertError);
-        }
-      }
-    }
-
-    return { error: null };
+    return { error: error as Error | null };
   };
 
   const signOut = async () => {
     await supabase.auth.signOut();
-    setUser(null);
-    setSession(null);
-    setInternalUser(null);
-    setIsAdmin(false);
-    setIsStaff(false);
-    setIsClient(false);
-    setUserRole(null);
-    setIsDevMode(false);
+    resetState();
   };
 
   const enableDevMode = () => {
@@ -249,8 +225,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(mockUser);
     setIsAdmin(true);
     setIsStaff(true);
-    setIsClient(false);
     setUserRole('admin');
+    setRolesLoaded(true);
     setIsDevMode(true);
     setIsLoading(false);
   };
@@ -263,9 +239,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         internalUser,
         isAdmin,
         isStaff,
-        isClient,
         userRole,
         isLoading,
+        rolesLoaded,
         isDevMode,
         signIn,
         signUp,

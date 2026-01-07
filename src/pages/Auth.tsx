@@ -5,10 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Scale, Mail, Lock, User, Users, Briefcase } from 'lucide-react';
+import { Scale, Mail, Lock, User } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { z } from 'zod';
-import { cn } from '@/lib/utils';
 
 const loginSchema = z.object({
   email: z.string().email('Invalid email address'),
@@ -19,29 +18,27 @@ const signupSchema = loginSchema.extend({
   name: z.string().min(2, 'Name must be at least 2 characters'),
 });
 
-type AccountType = 'client' | 'staff';
-
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [accountType, setAccountType] = useState<AccountType>('client');
   const [isLoading, setIsLoading] = useState(false);
-  const { user, isLoading: authLoading, isAdmin, isStaff, signIn, signUp, enableDevMode } = useAuth();
+  const { user, isLoading: authLoading, rolesLoaded, isAdmin, isStaff, signIn, signUp, enableDevMode } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Redirect authenticated users based on role
+  // Redirect authenticated users to dashboard
   useEffect(() => {
-    if (!authLoading && user) {
-      if (isAdmin || isStaff) {
-        navigate('/dashboard');
-      } else {
-        navigate('/client');
-      }
+    // Wait for both auth and roles to be loaded
+    if (authLoading || (user && !rolesLoaded)) {
+      return;
     }
-  }, [user, authLoading, isAdmin, isStaff, navigate]);
+    
+    if (user && rolesLoaded && (isAdmin || isStaff)) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [user, authLoading, rolesLoaded, isAdmin, isStaff, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,7 +69,7 @@ export default function AuthPage() {
         }
         // Navigation will be handled by useEffect after role is determined
       } else {
-        const { error } = await signUp(email, password, name, accountType);
+        const { error } = await signUp(email, password, name);
         if (error) {
           toast({
             title: 'Sign up failed',
@@ -101,62 +98,11 @@ export default function AuthPage() {
           </div>
           <CardTitle className="text-2xl font-serif">LawScheduler</CardTitle>
           <CardDescription>
-            {isLogin ? 'Sign in to your account' : 'Create your account'}
+            {isLogin ? 'Sign in to your account' : 'Create your staff account'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Account Type Selector - Only shown during signup */}
-            {!isLogin && (
-              <div className="space-y-2">
-                <Label>I am a...</Label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setAccountType('client')}
-                    className={cn(
-                      "flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all",
-                      accountType === 'client'
-                        ? "border-primary bg-primary/5"
-                        : "border-muted hover:border-muted-foreground/30"
-                    )}
-                  >
-                    <Users className={cn(
-                      "w-6 h-6",
-                      accountType === 'client' ? "text-primary" : "text-muted-foreground"
-                    )} />
-                    <span className={cn(
-                      "text-sm font-medium",
-                      accountType === 'client' ? "text-primary" : "text-muted-foreground"
-                    )}>
-                      Client
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAccountType('staff')}
-                    className={cn(
-                      "flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all",
-                      accountType === 'staff'
-                        ? "border-primary bg-primary/5"
-                        : "border-muted hover:border-muted-foreground/30"
-                    )}
-                  >
-                    <Briefcase className={cn(
-                      "w-6 h-6",
-                      accountType === 'staff' ? "text-primary" : "text-muted-foreground"
-                    )} />
-                    <span className={cn(
-                      "text-sm font-medium",
-                      accountType === 'staff' ? "text-primary" : "text-muted-foreground"
-                    )}>
-                      Staff Member
-                    </span>
-                  </button>
-                </div>
-              </div>
-            )}
-
             {!isLogin && (
               <div className="space-y-2">
                 <Label htmlFor="name">Full Name</Label>
