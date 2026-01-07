@@ -28,9 +28,11 @@ interface AuthContextType {
   isClient: boolean;
   userRole: 'admin' | 'staff' | 'client' | null;
   isLoading: boolean;
+  isDevMode: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, name: string, accountType: AccountType) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  enableDevMode: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -45,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userRole, setUserRole] = useState<'admin' | 'staff' | 'client' | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
+  const [isDevMode, setIsDevMode] = useState(false);
 
   const fetchInternalUser = async (userId: string) => {
     try {
@@ -229,6 +232,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsStaff(false);
     setIsClient(false);
     setUserRole(null);
+    setIsDevMode(false);
+  };
+
+  const enableDevMode = () => {
+    // Create mock user for dev mode
+    const mockUser = {
+      id: 'dev-user-id',
+      email: 'dev@test.com',
+      app_metadata: {},
+      user_metadata: { name: 'Dev User' },
+      aud: 'authenticated',
+      created_at: new Date().toISOString(),
+    } as User;
+
+    setUser(mockUser);
+    setIsAdmin(true);
+    setIsStaff(true);
+    setIsClient(false);
+    setUserRole('admin');
+    setIsDevMode(true);
+    setIsLoading(false);
   };
 
   return (
@@ -242,9 +266,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isClient,
         userRole,
         isLoading,
+        isDevMode,
         signIn,
         signUp,
         signOut,
+        enableDevMode,
       }}
     >
       {children}
