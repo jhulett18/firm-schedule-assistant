@@ -333,6 +333,70 @@ export type Database = {
         }
         Relationships: []
       }
+      scheduler_mappings: {
+        Row: {
+          active: boolean
+          booking_link_template: string | null
+          created_at: string
+          duration_minutes: number
+          host_attorney_user_id: string
+          id: string
+          lawmatics_scheduler_id: string | null
+          location_mode: Database["public"]["Enums"]["location_mode"]
+          meeting_type_id: string
+          room_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          booking_link_template?: string | null
+          created_at?: string
+          duration_minutes: number
+          host_attorney_user_id: string
+          id?: string
+          lawmatics_scheduler_id?: string | null
+          location_mode: Database["public"]["Enums"]["location_mode"]
+          meeting_type_id: string
+          room_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          booking_link_template?: string | null
+          created_at?: string
+          duration_minutes?: number
+          host_attorney_user_id?: string
+          id?: string
+          lawmatics_scheduler_id?: string | null
+          location_mode?: Database["public"]["Enums"]["location_mode"]
+          meeting_type_id?: string
+          room_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scheduler_mappings_host_attorney_user_id_fkey"
+            columns: ["host_attorney_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scheduler_mappings_meeting_type_id_fkey"
+            columns: ["meeting_type_id"]
+            isOneToOne: false
+            referencedRelation: "meeting_types"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scheduler_mappings_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           created_at: string
