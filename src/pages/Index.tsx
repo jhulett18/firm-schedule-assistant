@@ -15,10 +15,19 @@ export default function Index() {
       return;
     }
     
-    if (user) {
-      // All authenticated users go to dashboard (only admin/staff can login now)
-      console.log('User authenticated, routing to dashboard');
-      navigate("/dashboard", { replace: true });
+    if (user && rolesLoaded) {
+      // Route based on role
+      if (userRole === 'client') {
+        console.log('Client user, routing to /client');
+        navigate("/client", { replace: true });
+      } else if (userRole === 'admin' || userRole === 'staff') {
+        console.log('Staff/admin user, routing to /dashboard');
+        navigate("/dashboard", { replace: true });
+      } else {
+        // No valid role - redirect to auth
+        console.log('No valid role, routing to /auth');
+        navigate("/auth", { replace: true });
+      }
     } else {
       console.log('No user, routing to auth');
       navigate("/auth", { replace: true });

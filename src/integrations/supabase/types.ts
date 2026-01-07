@@ -227,6 +227,7 @@ export type Database = {
       meetings: {
         Row: {
           booking_request_id: string | null
+          client_email: string | null
           created_at: string
           created_by_user_id: string | null
           duration_minutes: number
@@ -255,6 +256,7 @@ export type Database = {
         }
         Insert: {
           booking_request_id?: string | null
+          client_email?: string | null
           created_at?: string
           created_by_user_id?: string | null
           duration_minutes?: number
@@ -283,6 +285,7 @@ export type Database = {
         }
         Update: {
           booking_request_id?: string | null
+          client_email?: string | null
           created_at?: string
           created_by_user_id?: string | null
           duration_minutes?: number
