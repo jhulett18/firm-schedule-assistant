@@ -3,27 +3,27 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Index() {
-  const { user, isLoading, isAdmin, isStaff, userRole } = useAuth();
+  const { user, isLoading, rolesLoaded, userRole } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    console.log('Index routing - isLoading:', isLoading, 'user:', !!user, 'isAdmin:', isAdmin, 'isStaff:', isStaff, 'userRole:', userRole);
+    console.log('Index routing - isLoading:', isLoading, 'rolesLoaded:', rolesLoaded, 'user:', !!user, 'userRole:', userRole);
     
-    if (!isLoading) {
-      if (user) {
-        // Route based on role - use userRole as the source of truth
-        if (userRole === 'admin' || userRole === 'staff') {
-          console.log('Routing to dashboard');
-          navigate("/dashboard", { replace: true });
-        } else {
-          console.log('Routing to client');
-          navigate("/client", { replace: true });
-        }
-      } else {
-        navigate("/auth", { replace: true });
-      }
+    // Wait until both auth state AND roles are loaded
+    if (isLoading || (user && !rolesLoaded)) {
+      console.log('Still loading auth or roles...');
+      return;
     }
-  }, [user, isLoading, userRole, navigate]);
+    
+    if (user) {
+      // All authenticated users go to dashboard (only admin/staff can login now)
+      console.log('User authenticated, routing to dashboard');
+      navigate("/dashboard", { replace: true });
+    } else {
+      console.log('No user, routing to auth');
+      navigate("/auth", { replace: true });
+    }
+  }, [user, isLoading, rolesLoaded, userRole, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
