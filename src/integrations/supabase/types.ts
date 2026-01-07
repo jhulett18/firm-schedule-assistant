@@ -181,6 +181,7 @@ export type Database = {
           in_person_location_choice:
             | Database["public"]["Enums"]["in_person_location"]
             | null
+          lawmatics_appointment_id: string | null
           location_mode: Database["public"]["Enums"]["location_mode"]
           m365_event_id: string | null
           meeting_type_id: string | null
@@ -208,6 +209,7 @@ export type Database = {
           in_person_location_choice?:
             | Database["public"]["Enums"]["in_person_location"]
             | null
+          lawmatics_appointment_id?: string | null
           location_mode?: Database["public"]["Enums"]["location_mode"]
           m365_event_id?: string | null
           meeting_type_id?: string | null
@@ -235,6 +237,7 @@ export type Database = {
           in_person_location_choice?:
             | Database["public"]["Enums"]["in_person_location"]
             | null
+          lawmatics_appointment_id?: string | null
           location_mode?: Database["public"]["Enums"]["location_mode"]
           m365_event_id?: string | null
           meeting_type_id?: string | null

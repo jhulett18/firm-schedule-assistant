@@ -3,7 +3,8 @@ import { useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Calendar, Clock, MapPin, Video, AlertCircle, CheckCircle } from "lucide-react";
+import { Calendar, Clock, MapPin, Video, AlertCircle, CheckCircle, XCircle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
 interface BookingRequest {
@@ -35,6 +36,7 @@ const mockSlots = [
 
 export default function PublicBooking() {
   const { token } = useParams<{ token: string }>();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bookingRequest, setBookingRequest] = useState<BookingRequest | null>(null);
@@ -42,6 +44,8 @@ export default function PublicBooking() {
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [bookingFailed, setBookingFailed] = useState(false);
+  const [failureMessage, setFailureMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -115,21 +119,55 @@ export default function PublicBooking() {
   }
 
   async function handleConfirmSlot() {
-    if (!selectedSlot || !bookingRequest) return;
+    if (!selectedSlot || !bookingRequest || !meeting) return;
 
     setConfirming(true);
+    setBookingFailed(false);
+    setFailureMessage(null);
 
-    // In a real implementation, this would:
-    // 1. Re-check availability
-    // 2. Book the meeting via calendar API
-    // 3. Update the meeting record
-    // 4. Mark booking request as Completed
+    try {
+      // Calculate end time based on duration
+      const endTime = new Date(selectedSlot.getTime() + meeting.duration_minutes * 60 * 1000);
 
-    // For now, simulate success
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+      // Call the confirm-booking edge function
+      const { data, error: invokeError } = await supabase.functions.invoke("confirm-booking", {
+        body: {
+          token,
+          startDatetime: selectedSlot.toISOString(),
+          endDatetime: endTime.toISOString(),
+        },
+      });
 
-    setConfirmed(true);
-    setConfirming(false);
+      if (invokeError) {
+        console.error("Error confirming booking:", invokeError);
+        throw new Error(invokeError.message || "Failed to confirm booking");
+      }
+
+      if (data?.success) {
+        setConfirmed(true);
+        toast({
+          title: "Meeting Confirmed!",
+          description: "Your meeting has been scheduled successfully.",
+        });
+      } else if (data?.error) {
+        // Booking failed (e.g., Lawmatics error)
+        setBookingFailed(true);
+        setFailureMessage(data.error);
+      } else {
+        throw new Error("Unexpected response from server");
+      }
+    } catch (err) {
+      console.error("Booking confirmation error:", err);
+      setBookingFailed(true);
+      setFailureMessage("We were unable to complete your booking. Please contact us directly to schedule your meeting.");
+      toast({
+        title: "Booking Failed",
+        description: "Please contact us directly to schedule your meeting.",
+        variant: "destructive",
+      });
+    } finally {
+      setConfirming(false);
+    }
   }
 
   function getLocationDisplay() {
@@ -168,6 +206,40 @@ export default function PublicBooking() {
                 <h2 className="text-xl font-semibold text-foreground mb-2">Unable to Load</h2>
                 <p className="text-muted-foreground">{error}</p>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (bookingFailed) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="max-w-md w-full">
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center text-center gap-4">
+              <XCircle className="h-12 w-12 text-destructive" />
+              <div>
+                <h2 className="text-xl font-semibold text-foreground mb-2">Unable to Complete Booking</h2>
+                <p className="text-muted-foreground">
+                  {failureMessage || "We encountered an issue while scheduling your meeting."}
+                </p>
+                <p className="text-muted-foreground mt-4">
+                  Please contact us directly at <strong>your-office@email.com</strong> or call <strong>(555) 123-4567</strong> to schedule your meeting.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setBookingFailed(false);
+                  setFailureMessage(null);
+                  setSelectedSlot(null);
+                }}
+                className="mt-2"
+              >
+                Try Again
+              </Button>
             </div>
           </CardContent>
         </Card>
