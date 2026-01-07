@@ -56,6 +56,41 @@ export type Database = {
           },
         ]
       }
+      booking_requests: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          meeting_id: string
+          public_token: string
+          status: Database["public"]["Enums"]["booking_request_status"]
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          id?: string
+          meeting_id: string
+          public_token?: string
+          status?: Database["public"]["Enums"]["booking_request_status"]
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          meeting_id?: string
+          public_token?: string
+          status?: Database["public"]["Enums"]["booking_request_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "booking_requests_meeting_id_fkey"
+            columns: ["meeting_id"]
+            isOneToOne: false
+            referencedRelation: "meetings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_types: {
         Row: {
           active: boolean
@@ -494,6 +529,7 @@ export type Database = {
         | "OverrideChange"
         | "SettingsChange"
         | "Failed"
+      booking_request_status: "Open" | "Completed" | "Expired"
       in_person_location: "RoomA" | "RoomB" | "AttorneyOffice"
       location_mode: "Zoom" | "InPerson"
       meeting_status:
@@ -648,6 +684,7 @@ export const Constants = {
         "SettingsChange",
         "Failed",
       ],
+      booking_request_status: ["Open", "Completed", "Expired"],
       in_person_location: ["RoomA", "RoomB", "AttorneyOffice"],
       location_mode: ["Zoom", "InPerson"],
       meeting_status: [
