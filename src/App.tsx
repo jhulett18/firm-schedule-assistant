@@ -8,6 +8,7 @@ import { AdminRoute } from "@/components/admin/AdminRoute";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import PublicBooking from "./pages/PublicBooking";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminRooms from "./pages/admin/AdminRooms";
 import AdminMeetingTypes from "./pages/admin/AdminMeetingTypes";
@@ -26,6 +27,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path="/r/:token" element={<PublicBooking />} />
             <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />
             <Route path="/admin/rooms" element={<AdminRoute><AdminRooms /></AdminRoute>} />
             <Route path="/admin/meeting-types" element={<AdminRoute><AdminMeetingTypes /></AdminRoute>} />
