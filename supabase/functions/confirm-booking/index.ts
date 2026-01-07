@@ -24,8 +24,138 @@ interface MeetingDetails {
   room_id: string | null;
   booking_request_id: string | null;
   meeting_types?: { name: string } | null;
-  rooms?: { name: string } | null;
+  rooms?: { name: string; resource_email: string } | null;
   host_attorney?: { name: string; email: string } | null;
+}
+
+// Helper to create/update Google Calendar event with room resource
+async function createGoogleCalendarEventWithRoom(
+  supabase: any,
+  meeting: MeetingDetails,
+  hostAttorney: { name: string; email: string } | null,
+  startDatetime: string,
+  endDatetime: string
+): Promise<{ success: boolean; error?: string }> {
+  const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
+  const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
+
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return { success: false, error: "Google OAuth not configured" };
+  }
+
+  if (!meeting.host_attorney_user_id) {
+    return { success: false, error: "No host attorney assigned" };
+  }
+
+  // Get Google calendar connection for the host attorney
+  const { data: calendarConnection } = await supabase
+    .from("calendar_connections")
+    .select("*")
+    .eq("provider", "google")
+    .eq("user_id", meeting.host_attorney_user_id)
+    .maybeSingle();
+
+  if (!calendarConnection) {
+    return { success: false, error: "No Google calendar connection for host attorney" };
+  }
+
+  let accessToken = calendarConnection.access_token;
+
+  // Refresh token if expired
+  if (calendarConnection.token_expires_at && new Date(calendarConnection.token_expires_at) < new Date()) {
+    if (!calendarConnection.refresh_token) {
+      return { success: false, error: "Token expired and no refresh token available" };
+    }
+
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: calendarConnection.refresh_token,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      return { success: false, error: "Failed to refresh Google token" };
+    }
+
+    const tokens = await tokenResponse.json();
+    accessToken = tokens.access_token;
+
+    // Update stored token
+    await supabase
+      .from("calendar_connections")
+      .update({
+        access_token: tokens.access_token,
+        token_expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
+        ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", calendarConnection.id);
+  }
+
+  // Build attendees list including room resource
+  const attendees: { email: string; resource?: boolean }[] = [];
+  
+  if (hostAttorney?.email) {
+    attendees.push({ email: hostAttorney.email });
+  }
+
+  // Add external attendees
+  for (const ext of meeting.external_attendees || []) {
+    if (ext.email) {
+      attendees.push({ email: ext.email });
+    }
+  }
+
+  // Add room as a resource attendee
+  if (meeting.rooms?.resource_email) {
+    attendees.push({ email: meeting.rooms.resource_email, resource: true });
+  }
+
+  const client = meeting.external_attendees?.[0];
+  const eventSummary = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+
+  const eventBody = {
+    summary: eventSummary,
+    start: {
+      dateTime: startDatetime,
+      timeZone: meeting.timezone,
+    },
+    end: {
+      dateTime: endDatetime,
+      timeZone: meeting.timezone,
+    },
+    attendees,
+    description: `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}\nRoom: ${meeting.rooms?.name || "N/A"}`,
+  };
+
+  console.log("Creating Google Calendar event with room:", JSON.stringify(eventBody));
+
+  const calendarResponse = await fetch(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(eventBody),
+    }
+  );
+
+  if (!calendarResponse.ok) {
+    const errorText = await calendarResponse.text();
+    console.error("Google Calendar API error:", errorText);
+    return { success: false, error: `Google Calendar API error: ${calendarResponse.status}` };
+  }
+
+  const eventData = await calendarResponse.json();
+  console.log("Google Calendar event created:", eventData.id);
+  return { success: true };
 }
 
 serve(async (req) => {
@@ -81,7 +211,7 @@ serve(async (req) => {
       .select(`
         *,
         meeting_types (name),
-        rooms (name)
+        rooms (name, resource_email)
       `)
       .eq("id", bookingRequest.meeting_id)
       .single();
@@ -93,6 +223,15 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // Fetch room_reservation_mode setting
+    const { data: roomReservationSetting } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "room_reservation_mode")
+      .maybeSingle();
+    
+    const roomReservationMode = roomReservationSetting?.value || "LawmaticsSync";
 
     // Fetch host attorney details
     let hostAttorney = null;
@@ -237,7 +376,26 @@ serve(async (req) => {
         .eq("id", meeting.id);
     }
 
-    // 8. Log success audit
+    // 8. If DirectCalendar mode and room is assigned, create calendar event with room
+    let calendarRoomReservationResult: { success: boolean; error?: string } | null = null;
+    if (roomReservationMode === "DirectCalendar" && meeting.room_id && meeting.rooms?.resource_email) {
+      console.log("DirectCalendar mode enabled, creating calendar event with room resource");
+      calendarRoomReservationResult = await createGoogleCalendarEventWithRoom(
+        supabase,
+        meeting as unknown as MeetingDetails,
+        hostAttorney,
+        startDatetime,
+        endDatetime
+      );
+      
+      if (!calendarRoomReservationResult.success) {
+        console.warn("Room calendar reservation failed (non-fatal):", calendarRoomReservationResult.error);
+      } else {
+        console.log("Room calendar reservation successful");
+      }
+    }
+
+    // 9. Log success audit
     await supabase.from("audit_logs").insert({
       action_type: "Booked",
       meeting_id: meeting.id,
@@ -246,6 +404,8 @@ serve(async (req) => {
         start_datetime: startDatetime,
         end_datetime: endDatetime,
         lawmatics_appointment_id: lawmaticsAppointmentId,
+        room_reservation_mode: roomReservationMode,
+        room_calendar_reserved: calendarRoomReservationResult?.success ?? null,
       },
     });
 

@@ -6,8 +6,10 @@ import { AdminLayout } from "@/components/admin/AdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2 } from "lucide-react";
 
 const AdminSettings = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -45,6 +47,40 @@ const AdminSettings = () => {
 
       if (error) throw error;
       return data;
+    },
+  });
+
+  // Fetch app settings
+  const { data: appSettings, isLoading: isLoadingSettings } = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("app_settings")
+        .select("*");
+
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const roomReservationMode = appSettings?.find(s => s.key === "room_reservation_mode")?.value || "LawmaticsSync";
+
+  // Update setting mutation
+  const updateSettingMutation = useMutation({
+    mutationFn: async ({ key, value }: { key: string; value: string }) => {
+      const { error } = await supabase
+        .from("app_settings")
+        .update({ value, updated_at: new Date().toISOString() })
+        .eq("key", key);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+      toast.success("Setting updated");
+    },
+    onError: (error) => {
+      toast.error(`Failed to update setting: ${error.message}`);
     },
   });
 
@@ -88,6 +124,42 @@ const AdminSettings = () => {
           <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-muted-foreground">Manage integrations and system settings</p>
         </div>
+
+        {/* Feature Flags Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Settings2 className="h-5 w-5" />
+              Feature Flags
+            </CardTitle>
+            <CardDescription>
+              Configure system behavior and feature toggles
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="space-y-2">
+              <Label htmlFor="room-reservation-mode">Room Reservation Mode</Label>
+              <Select
+                value={roomReservationMode}
+                onValueChange={(value) => updateSettingMutation.mutate({ key: "room_reservation_mode", value })}
+                disabled={isLoadingSettings || updateSettingMutation.isPending}
+              >
+                <SelectTrigger id="room-reservation-mode" className="w-[280px]">
+                  <SelectValue placeholder="Select mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="LawmaticsSync">LawmaticsSync (Default)</SelectItem>
+                  <SelectItem value="DirectCalendar">DirectCalendar</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">
+                <strong>LawmaticsSync:</strong> Room reservations handled through Lawmatics (default MVP behavior).
+                <br />
+                <strong>DirectCalendar:</strong> After Lawmatics booking, also creates a calendar event with the room resource as an attendee.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Lawmatics Integration Card */}
         <Card>
