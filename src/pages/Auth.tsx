@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Scale, Mail, Lock, User } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { z } from 'zod';
+import Footer from '@/components/layout/Footer';
 
 const loginSchema = z.object({
   email: z.string().email('Invalid email address'),
@@ -94,8 +95,9 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 gradient-subtle">
-      <Card className="w-full max-w-md shadow-floating animate-fade-in">
+    <div className="min-h-screen flex flex-col gradient-subtle">
+      <div className="flex-1 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md shadow-floating animate-fade-in">
         <CardHeader className="text-center space-y-2">
           <div className="mx-auto w-14 h-14 rounded-xl gradient-primary flex items-center justify-center mb-2">
             <Scale className="w-7 h-7 text-primary-foreground" />
@@ -194,9 +196,21 @@ export default function AuthPage() {
                 Skip Login (Dev Mode)
               </Button>
             </div>
+            
+            <div className="flex items-center justify-center gap-4 pt-3 text-xs text-muted-foreground">
+              <Link to="/privacy" className="hover:text-foreground transition-colors">
+                Privacy Policy
+              </Link>
+              <span>•</span>
+              <Link to="/terms" className="hover:text-foreground transition-colors">
+                Terms of Service
+              </Link>
+            </div>
           </div>
         </CardContent>
       </Card>
+      </div>
+      <Footer />
     </div>
   );
 }

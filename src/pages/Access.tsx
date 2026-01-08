@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Scale, Link as LinkIcon, ArrowRight, ArrowLeft } from 'lucide-react';
+import Footer from '@/components/layout/Footer';
 
 const ACTIVE_BOOKING_TOKEN_KEY = 'ACTIVE_BOOKING_TOKEN';
 
@@ -50,8 +51,9 @@ export default function Access() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-background">
-      <Card className="w-full max-w-md shadow-lg animate-fade-in">
+    <div className="min-h-screen flex flex-col bg-background">
+      <div className="flex-1 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md shadow-lg animate-fade-in">
         <CardHeader className="text-center space-y-2">
           <div className="mx-auto w-14 h-14 rounded-xl bg-primary flex items-center justify-center mb-2">
             <Scale className="w-7 h-7 text-primary-foreground" />
@@ -108,6 +110,8 @@ export default function Access() {
           </div>
         </CardContent>
       </Card>
+      </div>
+      <Footer />
     </div>
   );
 }

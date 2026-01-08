@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2 } from "lucide-react";
 
 const AdminSettings = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -23,6 +23,7 @@ const AdminSettings = () => {
   const [contactPhone, setContactPhone] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [contactMessage, setContactMessage] = useState("");
+  const [companyName, setCompanyName] = useState("");
   const [hasContactChanges, setHasContactChanges] = useState(false);
 
   // Handle OAuth callback results
@@ -88,10 +89,12 @@ const AdminSettings = () => {
       const phone = appSettings.find(s => s.key === "public_contact_phone")?.value || "";
       const email = appSettings.find(s => s.key === "public_contact_email")?.value || "";
       const message = appSettings.find(s => s.key === "public_contact_message")?.value || "";
+      const company = appSettings.find(s => s.key === "legal_company_name")?.value || "";
       
       setContactPhone(phone);
       setContactEmail(email);
       setContactMessage(message);
+      setCompanyName(company);
       setHasContactChanges(false);
     }
   }, [appSettings]);
@@ -102,14 +105,16 @@ const AdminSettings = () => {
       const origPhone = appSettings.find(s => s.key === "public_contact_phone")?.value || "";
       const origEmail = appSettings.find(s => s.key === "public_contact_email")?.value || "";
       const origMessage = appSettings.find(s => s.key === "public_contact_message")?.value || "";
+      const origCompany = appSettings.find(s => s.key === "legal_company_name")?.value || "";
       
       setHasContactChanges(
         contactPhone !== origPhone || 
         contactEmail !== origEmail || 
-        contactMessage !== origMessage
+        contactMessage !== origMessage ||
+        companyName !== origCompany
       );
     }
-  }, [contactPhone, contactEmail, contactMessage, appSettings]);
+  }, [contactPhone, contactEmail, contactMessage, companyName, appSettings]);
 
   const roomReservationMode = appSettings?.find(s => s.key === "room_reservation_mode")?.value || "LawmaticsSync";
 
@@ -171,6 +176,11 @@ const AdminSettings = () => {
           key: "public_contact_message", 
           value: contactMessage,
           description: "Custom message displayed on public booking pages when clients need help"
+        }),
+        upsertSettingMutation.mutateAsync({ 
+          key: "legal_company_name", 
+          value: companyName,
+          description: "Company name displayed in footer and legal pages"
         }),
       ]);
       queryClient.invalidateQueries({ queryKey: ["app-settings"] });
@@ -234,6 +244,21 @@ const AdminSettings = () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="company-name" className="flex items-center gap-2">
+                <Building2 className="h-4 w-4" />
+                Company/Firm Name
+              </Label>
+              <Input
+                id="company-name"
+                placeholder="Your Law Firm Name"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Displayed in the footer and on legal pages (Privacy Policy, Terms of Service)
+              </p>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="contact-phone" className="flex items-center gap-2">
