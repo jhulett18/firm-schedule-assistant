@@ -32,3 +32,6 @@ verify_jwt = true
 
 [functions.google-list-calendars]
 verify_jwt = true
+
+[functions.google-disconnect]
+verify_jwt = true

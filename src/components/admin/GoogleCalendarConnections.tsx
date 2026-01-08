@@ -21,8 +21,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Calendar, CheckCircle, XCircle, RefreshCw, Eye, Link2, AlertCircle, Search } from "lucide-react";
+import { Calendar, CheckCircle, XCircle, RefreshCw, Eye, Link2, AlertCircle, Search, Unlink } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface CalendarConnection {
@@ -116,6 +127,34 @@ export function GoogleCalendarConnections() {
     },
     onError: (error) => {
       toast.error(`Failed to verify: ${error.message}`);
+    },
+  });
+
+  // Disconnect mutation
+  const disconnectMutation = useMutation({
+    mutationFn: async (internalUserId: string) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const { data, error } = await supabase.functions.invoke("google-disconnect", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: { internalUserId },
+      });
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error || "Disconnect failed");
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["google-calendar-connections"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-connection-status"] });
+      toast.success("Google Calendar disconnected.");
+      if (data.revoke_error) {
+        console.warn("Token revoke warning:", data.revoke_error);
+      }
+    },
+    onError: (error) => {
+      toast.error(`Failed to disconnect: ${error.message}`);
     },
   });
 
@@ -280,6 +319,40 @@ export function GoogleCalendarConnections() {
                           <Eye className="h-4 w-4" />
                           <span className="ml-1 hidden sm:inline">View</span>
                         </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              disabled={disconnectMutation.isPending}
+                            >
+                              {disconnectMutation.isPending ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Unlink className="h-4 w-4" />
+                              )}
+                              <span className="ml-1 hidden sm:inline">Disconnect</span>
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Disconnect Google Calendar?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This will remove the calendar connection from LawScheduler for {conn.users?.name || "this user"}. You can reconnect at any time.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => disconnectMutation.mutate(conn.user_id)}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                Disconnect
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </TableCell>
                     </TableRow>
                   ))}
