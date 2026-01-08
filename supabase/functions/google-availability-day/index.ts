@@ -11,6 +11,11 @@ interface BusyInterval {
   end: string;
 }
 
+interface NormalizedBusy {
+  startMs: number;
+  endMs: number;
+}
+
 interface TimeSlot {
   start: string;
   end: string;
@@ -162,7 +167,6 @@ async function listEventsBusyIntervals(
         }
         const text = await response.text();
         console.error(`Failed to fetch events for calendar ${calendarId}: ${text}`);
-        // Continue to next calendar instead of failing completely
         break;
       }
 
@@ -170,22 +174,17 @@ async function listEventsBusyIntervals(
       const events: CalendarEvent[] = data.items || [];
       
       for (const event of events) {
-        // Skip cancelled events
         if (event.status === "cancelled") {
           continue;
         }
 
-        // In strict mode, treat transparent (Show as: Free) as busy too
-        // Otherwise, skip transparent events
         if (!strictTreatTransparentAsBusy && event.transparency === "transparent") {
           continue;
         }
 
         totalEventsCount++;
 
-        // Handle all-day events
         if (event.start.date && !event.start.dateTime) {
-          // All-day event - block the entire day (use the date as start/end)
           const startDate = new Date(event.start.date);
           const endDate = event.end.date ? new Date(event.end.date) : new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
           
@@ -194,7 +193,6 @@ async function listEventsBusyIntervals(
             end: endDate.toISOString(),
           });
         } else if (event.start.dateTime && event.end.dateTime) {
-          // Timed event
           allBusy.push({
             start: event.start.dateTime,
             end: event.end.dateTime,
@@ -208,6 +206,49 @@ async function listEventsBusyIntervals(
 
   console.log(`Events API found ${totalEventsCount} events creating ${allBusy.length} busy intervals`);
   return { busy: allBusy, error: null, eventsCount: totalEventsCount };
+}
+
+// Normalize busy intervals to epoch ms and merge overlapping/adjacent ones
+function normalizeBusyIntervals(intervals: BusyInterval[]): NormalizedBusy[] {
+  if (intervals.length === 0) return [];
+
+  // Convert to epoch ms
+  const normalized: NormalizedBusy[] = intervals.map(interval => ({
+    startMs: new Date(interval.start).getTime(),
+    endMs: new Date(interval.end).getTime(),
+  }));
+
+  // Sort by start time
+  normalized.sort((a, b) => a.startMs - b.startMs);
+
+  // Merge overlapping/adjacent intervals (within 1 minute gap)
+  const merged: NormalizedBusy[] = [];
+  let current = { ...normalized[0] };
+
+  for (let i = 1; i < normalized.length; i++) {
+    const next = normalized[i];
+    // If next starts within 1 minute of current end, merge them
+    if (next.startMs <= current.endMs + 60000) {
+      current.endMs = Math.max(current.endMs, next.endMs);
+    } else {
+      merged.push(current);
+      current = { ...next };
+    }
+  }
+  merged.push(current);
+
+  return merged;
+}
+
+// Check if a slot overlaps with any busy interval
+function slotOverlapsBusy(slotStartMs: number, slotEndMs: number, busyIntervals: NormalizedBusy[]): boolean {
+  for (const busy of busyIntervals) {
+    // Two intervals overlap if: slotStart < busyEnd AND slotEnd > busyStart
+    if (slotStartMs < busy.endMs && slotEndMs > busy.startMs) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function formatTimeLabel(date: Date): string {
@@ -224,83 +265,94 @@ function suggestSlotsForDay(
   dayDate: Date,
   durationMinutes: number,
   businessStart: string,
-  businessEnd: string
-): TimeSlot[] {
+  businessEnd: string,
+  debugMode: boolean = false
+): { slots: TimeSlot[]; debug?: any } {
   const slots: TimeSlot[] = [];
   const now = new Date();
-  const minimumNoticeTime = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour notice
+  const minimumNoticeMs = 60 * 60 * 1000; // 1 hour notice
+  const minimumNoticeTime = now.getTime() + minimumNoticeMs;
+  const slotDurationMs = durationMinutes * 60 * 1000;
+  const slotIncrementMs = 30 * 60 * 1000; // 30 minute increments
 
   // Skip weekends
   const dayOfWeek = dayDate.getDay();
   if (dayOfWeek === 0 || dayOfWeek === 6) {
-    return slots;
+    return { slots, debug: debugMode ? { skipped: "weekend" } : undefined };
   }
 
-  // Parse business hours
+  // Parse business hours - these are in local time for the day
   const [startHour, startMin] = businessStart.split(":").map(Number);
   const [endHour, endMin] = businessEnd.split(":").map(Number);
 
-  const dayStart = new Date(dayDate);
-  dayStart.setHours(startHour, startMin, 0, 0);
+  // Create day boundaries in epoch ms
+  const dayStartDate = new Date(dayDate);
+  dayStartDate.setHours(startHour, startMin, 0, 0);
+  const dayStartMs = dayStartDate.getTime();
 
-  const dayEnd = new Date(dayDate);
-  dayEnd.setHours(endHour, endMin, 0, 0);
+  const dayEndDate = new Date(dayDate);
+  dayEndDate.setHours(endHour, endMin, 0, 0);
+  const dayEndMs = dayEndDate.getTime();
 
-  // Sort busy intervals
-  const sortedBusy = busyIntervals
-    .map((b) => ({ start: new Date(b.start), end: new Date(b.end) }))
-    .filter((b) => b.start < dayEnd && b.end > dayStart)
-    .sort((a, b) => a.start.getTime() - b.start.getTime());
+  // Normalize and merge busy intervals
+  const normalizedBusy = normalizeBusyIntervals(busyIntervals);
 
-  // Find free slots
-  let slotStart = dayStart;
+  // Debug info
+  const debugInfo: any = debugMode ? {
+    dayStartIso: dayStartDate.toISOString(),
+    dayEndIso: dayEndDate.toISOString(),
+    dayStartMs,
+    dayEndMs,
+    rawBusyCount: busyIntervals.length,
+    mergedBusyCount: normalizedBusy.length,
+    first3Busy: normalizedBusy.slice(0, 3).map(b => ({
+      start: new Date(b.startMs).toISOString(),
+      end: new Date(b.endMs).toISOString(),
+    })),
+    candidateSlots: [],
+    filteredSlots: [],
+  } : undefined;
 
-  for (const busy of sortedBusy) {
-    if (busy.start > slotStart) {
-      const gapEnd = busy.start;
-      const gapDuration = (gapEnd.getTime() - slotStart.getTime()) / (1000 * 60);
+  // Generate candidate slots at 30-minute increments
+  let currentSlotStartMs = dayStartMs;
 
-      if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
-        let currentSlotStart = new Date(slotStart);
-        while (currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= gapEnd.getTime()) {
-          if (currentSlotStart >= minimumNoticeTime) {
-            const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
-            slots.push({
-              start: currentSlotStart.toISOString(),
-              end: slotEnd.toISOString(),
-              label: `${formatTimeLabel(currentSlotStart)} – ${formatTimeLabel(slotEnd)}`,
-            });
-          }
-          currentSlotStart = new Date(currentSlotStart.getTime() + 30 * 60 * 1000);
+  while (currentSlotStartMs + slotDurationMs <= dayEndMs) {
+    const slotEndMs = currentSlotStartMs + slotDurationMs;
+
+    // Check minimum notice time
+    if (currentSlotStartMs >= minimumNoticeTime) {
+      const slotStartDate = new Date(currentSlotStartMs);
+      const slotEndDate = new Date(slotEndMs);
+
+      if (debugMode && debugInfo.candidateSlots.length < 5) {
+        debugInfo.candidateSlots.push({
+          start: slotStartDate.toISOString(),
+          end: slotEndDate.toISOString(),
+          label: `${formatTimeLabel(slotStartDate)} – ${formatTimeLabel(slotEndDate)}`,
+        });
+      }
+
+      // Check if slot overlaps any busy interval
+      const overlaps = slotOverlapsBusy(currentSlotStartMs, slotEndMs, normalizedBusy);
+
+      if (!overlaps) {
+        const slot: TimeSlot = {
+          start: slotStartDate.toISOString(),
+          end: slotEndDate.toISOString(),
+          label: `${formatTimeLabel(slotStartDate)} – ${formatTimeLabel(slotEndDate)}`,
+        };
+        slots.push(slot);
+
+        if (debugMode && debugInfo.filteredSlots.length < 5) {
+          debugInfo.filteredSlots.push(slot);
         }
       }
     }
 
-    if (busy.end > slotStart) {
-      slotStart = busy.end;
-    }
+    currentSlotStartMs += slotIncrementMs;
   }
 
-  // Check remaining time
-  if (slotStart < dayEnd) {
-    const gapDuration = (dayEnd.getTime() - slotStart.getTime()) / (1000 * 60);
-    if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
-      let currentSlotStart = new Date(slotStart);
-      while (currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= dayEnd.getTime()) {
-        if (currentSlotStart >= minimumNoticeTime) {
-          const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
-          slots.push({
-            start: currentSlotStart.toISOString(),
-            end: slotEnd.toISOString(),
-            label: `${formatTimeLabel(currentSlotStart)} – ${formatTimeLabel(slotEnd)}`,
-          });
-        }
-        currentSlotStart = new Date(currentSlotStart.getTime() + 30 * 60 * 1000);
-      }
-    }
-  }
-
-  return slots;
+  return { slots, debug: debugInfo };
 }
 
 serve(async (req) => {
@@ -358,7 +410,7 @@ serve(async (req) => {
     const durationMinutes = body.durationMinutes || 60;
     const businessStart = body.businessStart || "09:00";
     const businessEnd = body.businessEnd || "17:00";
-    const timezone = body.timezone || "America/New_York";
+    const debugMode = body.debug === true;
 
     if (!dateStr) {
       return new Response(
@@ -383,6 +435,9 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // Only allow debug mode for admins
+    const effectiveDebugMode = debugMode && isAdmin;
 
     // Load the busy source setting
     const { data: busySourceSetting } = await supabase
@@ -411,7 +466,7 @@ serve(async (req) => {
       );
     }
 
-    // Determine calendars to check - use passed calendarIds, or connection.selected_calendar_ids, or fallback to ["primary"]
+    // Determine calendars to check
     const calendarsToCheck =
       Array.isArray(body.calendarIds) && body.calendarIds.length
         ? body.calendarIds
@@ -433,7 +488,7 @@ serve(async (req) => {
       }
     }
 
-    // Parse date and calculate range
+    // Parse date and calculate range - use midnight to midnight in UTC for the API call
     const [year, month, day] = dateStr.split("-").map(Number);
     const dayDate = new Date(year, month - 1, day, 0, 0, 0, 0);
     const timeMin = dayDate.toISOString();
@@ -447,10 +502,8 @@ serve(async (req) => {
     let eventsCount = 0;
 
     if (busySource === "events") {
-      // Use Events API for stricter busy detection
       let eventsResult = await listEventsBusyIntervals(accessToken, calendarsToCheck, timeMin, timeMax, true);
 
-      // Retry on 401
       if (eventsResult.error === "AUTH_EXPIRED" && connection.refresh_token) {
         console.log("Got 401, attempting token refresh...");
         const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
@@ -465,10 +518,8 @@ serve(async (req) => {
       busyError = eventsResult.error;
       eventsCount = eventsResult.eventsCount;
     } else {
-      // Use FreeBusy API (default)
       let busyResult = await getBusyIntervals(accessToken, calendarsToCheck, timeMin, timeMax);
 
-      // Retry on 401
       if (busyResult.error === "AUTH_EXPIRED" && connection.refresh_token) {
         console.log("Got 401, attempting token refresh...");
         const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
@@ -490,24 +541,39 @@ serve(async (req) => {
       );
     }
 
-    const slots = suggestSlotsForDay(
+    console.log(`Found ${busyIntervals.length} busy intervals before filtering`);
+    busyIntervals.forEach((b, i) => {
+      console.log(`  Busy[${i}]: ${b.start} to ${b.end}`);
+    });
+
+    const { slots, debug } = suggestSlotsForDay(
       busyIntervals,
       dayDate,
       durationMinutes,
       businessStart,
-      businessEnd
+      businessEnd,
+      effectiveDebugMode
     );
 
+    console.log(`Generated ${slots.length} available slots`);
+
+    const response: any = { 
+      date: dateStr, 
+      slots, 
+      error: null, 
+      calendarsChecked: calendarsToCheck,
+      busySource,
+      busyIntervalsCount: busyIntervals.length,
+      eventsCount: busySource === "events" ? eventsCount : undefined
+    };
+
+    // Include debug info only for admins
+    if (effectiveDebugMode && debug) {
+      response.debug = debug;
+    }
+
     return new Response(
-      JSON.stringify({ 
-        date: dateStr, 
-        slots, 
-        error: null, 
-        calendarsChecked: calendarsToCheck,
-        busySource,
-        busyIntervalsCount: busyIntervals.length,
-        eventsCount: busySource === "events" ? eventsCount : undefined
-      }),
+      JSON.stringify(response),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {

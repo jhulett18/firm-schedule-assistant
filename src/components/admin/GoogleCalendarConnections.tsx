@@ -137,11 +137,21 @@ export function GoogleCalendarConnections() {
 
   // Debug busy state
   const [isDebugging, setIsDebugging] = useState(false);
+  const [debugOverlapEnabled, setDebugOverlapEnabled] = useState(false);
   const [debugResult, setDebugResult] = useState<{
     freebusyCount: number;
     eventsCount: number;
     calendarsChecked: string[];
     busySource: string;
+    debug?: {
+      dayStartIso: string;
+      dayEndIso: string;
+      rawBusyCount: number;
+      mergedBusyCount: number;
+      first3Busy: { start: string; end: string }[];
+      candidateSlots: { start: string; end: string; label: string }[];
+      filteredSlots: { start: string; end: string; label: string }[];
+    };
   } | null>(null);
 
   // Fetch all calendar connections (admin sees all, staff sees own)
@@ -490,14 +500,15 @@ export function GoogleCalendarConnections() {
         console.error("FreeBusy debug error:", freebusyError);
       }
 
-      // Get a fresh day slots call to see what we're using
+      // Get a fresh day slots call to see what we're using - with debug flag
       const { data: dayData } = await supabase.functions.invoke("google-availability-day", {
         headers: { Authorization: `Bearer ${session.access_token}` },
         body: { 
           internalUserId: viewingCalendars, 
           date: selectedAvailabilityDate, 
           durationMinutes: availabilityDuration,
-          calendarIds: calendarIdsToCheck.length > 0 ? calendarIdsToCheck : undefined 
+          calendarIds: calendarIdsToCheck.length > 0 ? calendarIdsToCheck : undefined,
+          debug: debugOverlapEnabled
         },
       });
 
@@ -506,6 +517,7 @@ export function GoogleCalendarConnections() {
         eventsCount: dayData?.eventsCount || dayData?.busyIntervalsCount || 0,
         calendarsChecked: dayData?.calendarsChecked || freebusyData?.calendarsChecked || [],
         busySource: dayData?.busySource || "freebusy",
+        debug: dayData?.debug,
       });
 
       toast.success("Debug info loaded");
@@ -1142,13 +1154,49 @@ export function GoogleCalendarConnections() {
                         {/* Debug result panel */}
                         {debugResult && (
                           <div className="mb-3 p-2 rounded border bg-muted/50 text-xs space-y-1">
-                            <div className="font-medium text-muted-foreground">Debug Info</div>
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-muted-foreground">Debug Info</span>
+                              <label className="flex items-center gap-1 text-muted-foreground">
+                                <input
+                                  type="checkbox"
+                                  checked={debugOverlapEnabled}
+                                  onChange={(e) => setDebugOverlapEnabled(e.target.checked)}
+                                  className="h-3 w-3"
+                                />
+                                <span>Overlap detail</span>
+                              </label>
+                            </div>
                             <div>Busy Source: <span className="font-mono">{debugResult.busySource}</span></div>
                             <div>FreeBusy intervals: <span className="font-mono">{debugResult.freebusyCount}</span></div>
                             <div>Events busy count: <span className="font-mono">{debugResult.eventsCount}</span></div>
                             <div className="text-muted-foreground truncate" title={debugResult.calendarsChecked.join(", ")}>
                               Calendars: {debugResult.calendarsChecked.length}
                             </div>
+                            
+                            {/* Extended debug info when overlap debugging is enabled */}
+                            {debugResult.debug && (
+                              <div className="mt-2 pt-2 border-t border-muted space-y-1">
+                                <div className="font-medium text-muted-foreground">Overlap Analysis</div>
+                                <div>Day range: <span className="font-mono text-[10px]">{debugResult.debug.dayStartIso?.slice(11, 16)} – {debugResult.debug.dayEndIso?.slice(11, 16)}</span></div>
+                                <div>Raw busy: <span className="font-mono">{debugResult.debug.rawBusyCount}</span> → Merged: <span className="font-mono">{debugResult.debug.mergedBusyCount}</span></div>
+                                
+                                {debugResult.debug.first3Busy?.length > 0 && (
+                                  <div>
+                                    <div className="text-muted-foreground mt-1">Busy blocks:</div>
+                                    {debugResult.debug.first3Busy.map((b, i) => (
+                                      <div key={i} className="font-mono text-[10px] text-destructive">
+                                        {new Date(b.start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} – {new Date(b.end).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                
+                                <div className="text-muted-foreground mt-1">
+                                  Candidates: {debugResult.debug.candidateSlots?.length || 0} → 
+                                  Filtered: {debugResult.debug.filteredSlots?.length || 0}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
 
