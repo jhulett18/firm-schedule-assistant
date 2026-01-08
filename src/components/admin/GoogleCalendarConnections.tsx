@@ -265,9 +265,20 @@ export function GoogleCalendarConnections() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
+      // Compute calendar IDs to check from the loaded calendars (primary + selected)
+      const calendarIdsToCheck = calendars
+        .filter(c => c.primary || c.selected)
+        .map(c => c.id);
+
       const { data, error } = await supabase.functions.invoke("google-availability-month", {
         headers: { Authorization: `Bearer ${session.access_token}` },
-        body: { internalUserId, month, year, durationMinutes: duration },
+        body: { 
+          internalUserId, 
+          month, 
+          year, 
+          durationMinutes: duration,
+          calendarIds: calendarIdsToCheck.length > 0 ? calendarIdsToCheck : undefined 
+        },
       });
 
       if (error) throw error;
@@ -295,9 +306,19 @@ export function GoogleCalendarConnections() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
+      // Compute calendar IDs to check from the loaded calendars (primary + selected)
+      const calendarIdsToCheck = calendars
+        .filter(c => c.primary || c.selected)
+        .map(c => c.id);
+
       const { data, error } = await supabase.functions.invoke("google-availability-day", {
         headers: { Authorization: `Bearer ${session.access_token}` },
-        body: { internalUserId, date, durationMinutes: duration },
+        body: { 
+          internalUserId, 
+          date, 
+          durationMinutes: duration,
+          calendarIds: calendarIdsToCheck.length > 0 ? calendarIdsToCheck : undefined 
+        },
       });
 
       if (error) throw error;
