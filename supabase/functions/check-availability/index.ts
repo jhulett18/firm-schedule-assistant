@@ -32,18 +32,84 @@ interface TimeSlot {
   end: string;
 }
 
+// Refresh access token helper
+async function refreshAccessToken(
+  connectionId: string,
+  refreshToken: string,
+  supabase: any
+): Promise<{ access_token: string; expires_at: string } | null> {
+  const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
+  const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
+
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    console.error("Missing Google OAuth credentials for refresh");
+    return null;
+  }
+
+  try {
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      console.error("Token refresh failed:", await tokenResponse.text());
+      return null;
+    }
+
+    const tokens = await tokenResponse.json();
+    const tokenExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+
+    // Update the connection with new token
+    const { error: updateError } = await supabase
+      .from("calendar_connections")
+      .update({
+        access_token: tokens.access_token,
+        token_expires_at: tokenExpiresAt,
+        ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", connectionId);
+
+    if (updateError) {
+      console.error("Failed to update refreshed token:", updateError);
+      return null;
+    }
+
+    console.log("Token refreshed successfully for connection:", connectionId);
+    return { access_token: tokens.access_token, expires_at: tokenExpiresAt };
+  } catch (err) {
+    console.error("Error during token refresh:", err);
+    return null;
+  }
+}
+
 // Calendar Provider Interface
 interface CalendarProvider {
   getBusyIntervals(accessToken: string, calendars: string[], start: string, end: string): Promise<BusyInterval[]>;
 }
 
-// Google Calendar Provider
-const googleProvider: CalendarProvider = {
-  async getBusyIntervals(accessToken: string, calendars: string[], start: string, end: string): Promise<BusyInterval[]> {
+// Google Calendar Provider with retry on 401
+async function getBusyIntervalsWithRetry(
+  connection: any,
+  calendars: string[],
+  start: string,
+  end: string,
+  supabase: any
+): Promise<{ busy: BusyInterval[]; newAccessToken?: string }> {
+  let accessToken = connection.access_token;
+
+  const doRequest = async (token: string) => {
     const response = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -52,26 +118,42 @@ const googleProvider: CalendarProvider = {
         items: calendars.map(id => ({ id })),
       }),
     });
+    return response;
+  };
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Google FreeBusy API error:", errorText);
-      throw new Error(`Google Calendar API error: ${response.status}`);
+  let response = await doRequest(accessToken);
+
+  // If 401 and we have refresh token, refresh and retry
+  if (response.status === 401 && connection.refresh_token) {
+    console.log(`Got 401 for connection ${connection.id}, attempting refresh...`);
+    const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
+    if (refreshResult) {
+      accessToken = refreshResult.access_token;
+      response = await doRequest(accessToken);
     }
-
-    const data = await response.json();
-    const allBusy: BusyInterval[] = [];
-
-    for (const calendarId of Object.keys(data.calendars || {})) {
-      const calendar = data.calendars[calendarId];
-      if (calendar.busy) {
-        allBusy.push(...calendar.busy);
-      }
-    }
-
-    return allBusy;
   }
-};
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Google FreeBusy API error:", errorText);
+    throw new Error(`Google Calendar API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const allBusy: BusyInterval[] = [];
+
+  for (const calendarId of Object.keys(data.calendars || {})) {
+    const calendar = data.calendars[calendarId];
+    if (calendar.busy) {
+      allBusy.push(...calendar.busy);
+    }
+    if (calendar.errors) {
+      console.warn(`Errors for calendar ${calendarId}:`, calendar.errors);
+    }
+  }
+
+  return { busy: allBusy, newAccessToken: accessToken !== connection.access_token ? accessToken : undefined };
+}
 
 // Suggest available slots based on busy intervals
 function suggestSlots(
@@ -233,33 +315,48 @@ serve(async (req) => {
     }
 
     const allBusyIntervals: BusyInterval[] = [];
+    let participantsChecked = 0;
 
     // Check each participant's calendar
     for (const connection of connections || []) {
-      // Check if token is expired
-      if (connection.token_expires_at && new Date(connection.token_expires_at) < new Date()) {
-        console.log(`Token expired for user ${connection.user_id}, skipping`);
-        continue;
+      // Check if token is expired or expiring soon - if so, refresh instead of skipping
+      const tokenExpiresAt = connection.token_expires_at ? new Date(connection.token_expires_at) : null;
+      const now = new Date();
+      const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
+
+      if (tokenExpiresAt && tokenExpiresAt < fiveMinutesFromNow) {
+        if (connection.refresh_token) {
+          console.log(`Token expired/expiring for user ${connection.user_id}, refreshing...`);
+          const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
+          if (refreshResult) {
+            connection.access_token = refreshResult.access_token;
+          } else {
+            console.error(`Failed to refresh token for user ${connection.user_id}`);
+            continue;
+          }
+        } else {
+          console.log(`Token expired for user ${connection.user_id} and no refresh token, skipping`);
+          continue;
+        }
       }
 
       try {
-        // Get user's email for calendar lookup
-        const { data: userData } = await supabase
-          .from("users")
-          .select("email")
-          .eq("id", connection.user_id)
-          .single();
+        // Use selected_calendar_ids if available, otherwise fall back to ["primary"]
+        const calendarIds = connection.selected_calendar_ids?.length
+          ? connection.selected_calendar_ids
+          : ["primary"];
+        
+        console.log(`Checking calendars for user ${connection.user_id}:`, calendarIds);
 
-        if (!userData?.email) continue;
-
-        const calendars = [userData.email];
-        const busy = await googleProvider.getBusyIntervals(
-          connection.access_token,
-          calendars,
+        const { busy } = await getBusyIntervalsWithRetry(
+          connection,
+          calendarIds,
           startDate,
-          endDate
+          endDate,
+          supabase
         );
         allBusyIntervals.push(...busy);
+        participantsChecked++;
       } catch (err) {
         console.error(`Failed to get busy for user ${connection.user_id}:`, err);
       }
@@ -268,15 +365,16 @@ serve(async (req) => {
     // Check room availability if in-person meeting
     if (roomResourceEmail) {
       // Find a connection with calendar access to check the room
-      // Typically this would be a service account or admin connection
       const adminConnection = connections?.[0];
       if (adminConnection) {
         try {
-          const busy = await googleProvider.getBusyIntervals(
-            adminConnection.access_token,
+          console.log(`Checking room availability: ${roomResourceEmail}`);
+          const { busy } = await getBusyIntervalsWithRetry(
+            adminConnection,
             [roomResourceEmail],
             startDate,
-            endDate
+            endDate,
+            supabase
           );
           allBusyIntervals.push(...busy);
         } catch (err) {
@@ -294,12 +392,12 @@ serve(async (req) => {
       preferences
     );
 
-    console.log(`Found ${slots.length} available slots`);
+    console.log(`Found ${slots.length} available slots, checked ${participantsChecked} participants`);
 
     return new Response(JSON.stringify({ 
       slots,
       busyIntervals: allBusyIntervals,
-      participantsChecked: connections?.length || 0
+      participantsChecked
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

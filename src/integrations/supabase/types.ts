@@ -128,6 +128,7 @@ export type Database = {
           refresh_token: string | null
           resource_email: string | null
           scopes: string[] | null
+          selected_calendar_ids: string[] | null
           token_expires_at: string | null
           updated_at: string
           user_id: string | null
@@ -144,6 +145,7 @@ export type Database = {
           refresh_token?: string | null
           resource_email?: string | null
           scopes?: string[] | null
+          selected_calendar_ids?: string[] | null
           token_expires_at?: string | null
           updated_at?: string
           user_id?: string | null
@@ -160,6 +162,7 @@ export type Database = {
           refresh_token?: string | null
           resource_email?: string | null
           scopes?: string[] | null
+          selected_calendar_ids?: string[] | null
           token_expires_at?: string | null
           updated_at?: string
           user_id?: string | null
