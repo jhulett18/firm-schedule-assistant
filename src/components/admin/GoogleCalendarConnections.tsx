@@ -51,7 +51,8 @@ import {
   Clock,
   ChevronLeft,
   ChevronRight,
-  CalendarCheck
+  CalendarCheck,
+  Bug
 } from "lucide-react";
 import { formatDistanceToNow, format, parseISO, isToday, isTomorrow, startOfDay } from "date-fns";
 
@@ -133,6 +134,15 @@ export function GoogleCalendarConnections() {
   const [isLoadingDaySlots, setIsLoadingDaySlots] = useState(false);
   const [daySlotsError, setDaySlotsError] = useState<string | null>(null);
   const [activeDialogTab, setActiveDialogTab] = useState<string>("calendars");
+
+  // Debug busy state
+  const [isDebugging, setIsDebugging] = useState(false);
+  const [debugResult, setDebugResult] = useState<{
+    freebusyCount: number;
+    eventsCount: number;
+    calendarsChecked: string[];
+    busySource: string;
+  } | null>(null);
 
   // Fetch all calendar connections (admin sees all, staff sees own)
   const { data: connections, isLoading: loadingConnections } = useQuery({
@@ -347,10 +357,11 @@ export function GoogleCalendarConnections() {
     setEvents([]);
     setEventsError(null);
     setSelectedCalendarId("primary");
-    setActiveDialogTab("calendars");
+  setActiveDialogTab("calendars");
     setAvailabilityDays([]);
     setSelectedAvailabilityDate(null);
     setDaySlots([]);
+    setDebugResult(null);
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -444,8 +455,65 @@ export function GoogleCalendarConnections() {
   // Handle day click
   const handleDayClick = (date: string) => {
     setSelectedAvailabilityDate(date);
+    setDebugResult(null);
     if (viewingCalendars) {
       fetchDaySlots(viewingCalendars, date, availabilityDuration);
+    }
+  };
+
+  // Debug busy - compare FreeBusy vs Events API
+  const handleDebugBusy = async () => {
+    if (!viewingCalendars || !selectedAvailabilityDate) return;
+    
+    setIsDebugging(true);
+    setDebugResult(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const calendarIdsToCheck = calendars
+        .filter(c => c.primary || c.selected)
+        .map(c => c.id);
+
+      // Call google-busy-debug to get FreeBusy count
+      const { data: freebusyData, error: freebusyError } = await supabase.functions.invoke("google-busy-debug", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: { 
+          internalUserId: viewingCalendars,
+          start: `${selectedAvailabilityDate}T00:00:00Z`,
+          end: `${selectedAvailabilityDate}T23:59:59Z`,
+        },
+      });
+
+      if (freebusyError) {
+        console.error("FreeBusy debug error:", freebusyError);
+      }
+
+      // Get a fresh day slots call to see what we're using
+      const { data: dayData } = await supabase.functions.invoke("google-availability-day", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: { 
+          internalUserId: viewingCalendars, 
+          date: selectedAvailabilityDate, 
+          durationMinutes: availabilityDuration,
+          calendarIds: calendarIdsToCheck.length > 0 ? calendarIdsToCheck : undefined 
+        },
+      });
+
+      setDebugResult({
+        freebusyCount: freebusyData?.busyIntervals?.length || 0,
+        eventsCount: dayData?.eventsCount || dayData?.busyIntervalsCount || 0,
+        calendarsChecked: dayData?.calendarsChecked || freebusyData?.calendarsChecked || [],
+        busySource: dayData?.busySource || "freebusy",
+      });
+
+      toast.success("Debug info loaded");
+    } catch (err) {
+      toast.error("Failed to load debug info");
+      console.error("Debug error:", err);
+    } finally {
+      setIsDebugging(false);
     }
   };
 
@@ -1052,9 +1120,37 @@ export function GoogleCalendarConnections() {
                   <div className="w-1/3 flex flex-col min-h-0 border-l pl-4">
                     {selectedAvailabilityDate ? (
                       <>
-                        <h3 className="font-medium text-sm mb-2">
-                          {format(parseISO(selectedAvailabilityDate), "EEEE, MMMM d, yyyy")}
-                        </h3>
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="font-medium text-sm">
+                            {format(parseISO(selectedAvailabilityDate), "EEEE, MMMM d, yyyy")}
+                          </h3>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleDebugBusy}
+                            disabled={isDebugging}
+                            title="Debug why this time is available/busy"
+                          >
+                            {isDebugging ? (
+                              <RefreshCw className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Bug className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+
+                        {/* Debug result panel */}
+                        {debugResult && (
+                          <div className="mb-3 p-2 rounded border bg-muted/50 text-xs space-y-1">
+                            <div className="font-medium text-muted-foreground">Debug Info</div>
+                            <div>Busy Source: <span className="font-mono">{debugResult.busySource}</span></div>
+                            <div>FreeBusy intervals: <span className="font-mono">{debugResult.freebusyCount}</span></div>
+                            <div>Events busy count: <span className="font-mono">{debugResult.eventsCount}</span></div>
+                            <div className="text-muted-foreground truncate" title={debugResult.calendarsChecked.join(", ")}>
+                              Calendars: {debugResult.calendarsChecked.length}
+                            </div>
+                          </div>
+                        )}
 
                         {daySlotsError ? (
                           <div className="text-center py-6">

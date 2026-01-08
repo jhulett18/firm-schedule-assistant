@@ -17,6 +17,15 @@ interface TimeSlot {
   label: string;
 }
 
+interface CalendarEvent {
+  id: string;
+  status: string;
+  summary?: string;
+  start: { dateTime?: string; date?: string };
+  end: { dateTime?: string; date?: string };
+  transparency?: string;
+}
+
 async function refreshAccessToken(
   connectionId: string,
   refreshToken: string,
@@ -72,6 +81,7 @@ async function refreshAccessToken(
   }
 }
 
+// FreeBusy API approach
 async function getBusyIntervals(
   accessToken: string,
   calendars: string[],
@@ -110,6 +120,94 @@ async function getBusyIntervals(
   }
 
   return { busy: allBusy, error: null };
+}
+
+// Events API approach - stricter, treats all non-cancelled events as busy
+async function listEventsBusyIntervals(
+  accessToken: string,
+  calendarIds: string[],
+  timeMin: string,
+  timeMax: string,
+  strictTreatTransparentAsBusy: boolean = true
+): Promise<{ busy: BusyInterval[]; error: string | null; eventsCount: number }> {
+  const allBusy: BusyInterval[] = [];
+  let totalEventsCount = 0;
+
+  for (const calendarId of calendarIds) {
+    let pageToken: string | undefined = undefined;
+    
+    do {
+      const params = new URLSearchParams({
+        singleEvents: "true",
+        orderBy: "startTime",
+        timeMin,
+        timeMax,
+        maxResults: "250",
+      });
+      if (pageToken) {
+        params.set("pageToken", pageToken);
+      }
+
+      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
+      
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          return { busy: [], error: "AUTH_EXPIRED", eventsCount: 0 };
+        }
+        const text = await response.text();
+        console.error(`Failed to fetch events for calendar ${calendarId}: ${text}`);
+        // Continue to next calendar instead of failing completely
+        break;
+      }
+
+      const data = await response.json();
+      const events: CalendarEvent[] = data.items || [];
+      
+      for (const event of events) {
+        // Skip cancelled events
+        if (event.status === "cancelled") {
+          continue;
+        }
+
+        // In strict mode, treat transparent (Show as: Free) as busy too
+        // Otherwise, skip transparent events
+        if (!strictTreatTransparentAsBusy && event.transparency === "transparent") {
+          continue;
+        }
+
+        totalEventsCount++;
+
+        // Handle all-day events
+        if (event.start.date && !event.start.dateTime) {
+          // All-day event - block the entire day (use the date as start/end)
+          const startDate = new Date(event.start.date);
+          const endDate = event.end.date ? new Date(event.end.date) : new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+          
+          allBusy.push({
+            start: startDate.toISOString(),
+            end: endDate.toISOString(),
+          });
+        } else if (event.start.dateTime && event.end.dateTime) {
+          // Timed event
+          allBusy.push({
+            start: event.start.dateTime,
+            end: event.end.dateTime,
+          });
+        }
+      }
+
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+  }
+
+  console.log(`Events API found ${totalEventsCount} events creating ${allBusy.length} busy intervals`);
+  return { busy: allBusy, error: null, eventsCount: totalEventsCount };
 }
 
 function formatTimeLabel(date: Date): string {
@@ -286,6 +384,16 @@ serve(async (req) => {
       });
     }
 
+    // Load the busy source setting
+    const { data: busySourceSetting } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "availability_busy_source")
+      .maybeSingle();
+
+    const busySource = busySourceSetting?.value || "freebusy";
+    console.log(`Using busy source: ${busySource}`);
+
     // Load Google connection
     const { data: connection, error: connError } = await supabase
       .from("calendar_connections")
@@ -334,29 +442,56 @@ serve(async (req) => {
 
     console.log(`Fetching availability for ${dateStr}, from ${timeMin} to ${timeMax}`);
 
-    // Fetch busy intervals
-    let busyResult = await getBusyIntervals(accessToken, calendarsToCheck, timeMin, timeMax);
+    let busyIntervals: BusyInterval[] = [];
+    let busyError: string | null = null;
+    let eventsCount = 0;
 
-    // Retry on 401
-    if (busyResult.error === "AUTH_EXPIRED" && connection.refresh_token) {
-      console.log("Got 401, attempting token refresh...");
-      const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
-      if (refreshResult) {
-        busyResult = await getBusyIntervals(refreshResult.access_token, calendarsToCheck, timeMin, timeMax);
-      } else {
-        busyResult = { busy: [], error: "Token refresh failed" };
+    if (busySource === "events") {
+      // Use Events API for stricter busy detection
+      let eventsResult = await listEventsBusyIntervals(accessToken, calendarsToCheck, timeMin, timeMax, true);
+
+      // Retry on 401
+      if (eventsResult.error === "AUTH_EXPIRED" && connection.refresh_token) {
+        console.log("Got 401, attempting token refresh...");
+        const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
+        if (refreshResult) {
+          eventsResult = await listEventsBusyIntervals(refreshResult.access_token, calendarsToCheck, timeMin, timeMax, true);
+        } else {
+          eventsResult = { busy: [], error: "Token refresh failed", eventsCount: 0 };
+        }
       }
+
+      busyIntervals = eventsResult.busy;
+      busyError = eventsResult.error;
+      eventsCount = eventsResult.eventsCount;
+    } else {
+      // Use FreeBusy API (default)
+      let busyResult = await getBusyIntervals(accessToken, calendarsToCheck, timeMin, timeMax);
+
+      // Retry on 401
+      if (busyResult.error === "AUTH_EXPIRED" && connection.refresh_token) {
+        console.log("Got 401, attempting token refresh...");
+        const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
+        if (refreshResult) {
+          busyResult = await getBusyIntervals(refreshResult.access_token, calendarsToCheck, timeMin, timeMax);
+        } else {
+          busyResult = { busy: [], error: "Token refresh failed" };
+        }
+      }
+
+      busyIntervals = busyResult.busy;
+      busyError = busyResult.error;
     }
 
-    if (busyResult.error && busyResult.error !== "AUTH_EXPIRED") {
+    if (busyError && busyError !== "AUTH_EXPIRED") {
       return new Response(
-        JSON.stringify({ error: busyResult.error, date: dateStr, slots: [] }),
+        JSON.stringify({ error: busyError, date: dateStr, slots: [] }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const slots = suggestSlotsForDay(
-      busyResult.busy,
+      busyIntervals,
       dayDate,
       durationMinutes,
       businessStart,
@@ -364,7 +499,15 @@ serve(async (req) => {
     );
 
     return new Response(
-      JSON.stringify({ date: dateStr, slots, error: null, calendarsChecked: calendarsToCheck }),
+      JSON.stringify({ 
+        date: dateStr, 
+        slots, 
+        error: null, 
+        calendarsChecked: calendarsToCheck,
+        busySource,
+        busyIntervalsCount: busyIntervals.length,
+        eventsCount: busySource === "events" ? eventsCount : undefined
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
