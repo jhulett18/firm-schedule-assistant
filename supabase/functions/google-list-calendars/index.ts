@@ -218,6 +218,7 @@ serve(async (req) => {
         );
         
         if (refreshResult) {
+          accessToken = refreshResult.access_token;
           const retryResponse = await fetch(
             "https://www.googleapis.com/calendar/v3/users/me/calendarList",
             {
@@ -250,11 +251,42 @@ serve(async (req) => {
       verifiedError = `API error: ${apiError instanceof Error ? apiError.message : String(apiError)}`;
     }
 
-    // Update verification fields
+    // Build selected calendar IDs list:
+    // - Include calendars where selected === true
+    // - Include only accessRole in ["owner", "writer", "reader"]
+    // - ALWAYS ensure primary calendar is included
+    const validAccessRoles = ["owner", "writer", "reader"];
+    const selectedCalendarIds: string[] = [];
+    
+    for (const cal of calendars) {
+      if (!validAccessRoles.includes(cal.accessRole)) continue;
+      
+      // Always include primary, or include if marked as selected
+      if (cal.primary || cal.selected) {
+        if (!selectedCalendarIds.includes(cal.id)) {
+          selectedCalendarIds.push(cal.id);
+        }
+      }
+    }
+
+    // Ensure primary is at the front if present
+    const primaryCal = calendars.find(c => c.primary);
+    if (primaryCal && selectedCalendarIds.includes(primaryCal.id)) {
+      const idx = selectedCalendarIds.indexOf(primaryCal.id);
+      if (idx > 0) {
+        selectedCalendarIds.splice(idx, 1);
+        selectedCalendarIds.unshift(primaryCal.id);
+      }
+    }
+
+    console.log(`Selected calendar IDs to persist: ${selectedCalendarIds.length}`, selectedCalendarIds);
+
+    // Update verification fields AND persist selected_calendar_ids
     const verifiedAt = new Date().toISOString();
     const { error: updateError } = await supabase
       .from("calendar_connections")
       .update({
+        selected_calendar_ids: selectedCalendarIds,
         last_verified_at: verifiedAt,
         last_verified_ok: verifiedOk,
         last_verified_error: verifiedError,
@@ -270,6 +302,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         calendars,
+        selectedCalendarIds,
         error: verifiedError,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
