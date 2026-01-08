@@ -68,32 +68,60 @@ serve(async (req) => {
     }
 
     // Exchange authorization code for access token
-    const tokenUrl = "https://app.lawmatics.com/oauth/token";
+    // Try multiple endpoints - api.lawmatics.com first, then app.lawmatics.com
+    const tokenUrls = [
+      "https://api.lawmatics.com/oauth/token",
+      "https://app.lawmatics.com/oauth/token",
+    ];
     const redirectUri = `${supabaseUrl}/functions/v1/lawmatics-oauth-callback`;
 
     console.log("Exchanging code for token...");
 
-    const tokenResponse = await fetch(tokenUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code: code,
-        redirect_uri: redirectUri,
-        client_id: lawmaticsClientId!,
-        client_secret: lawmaticsClientSecret!,
-      }),
-    });
+    let tokenData: { access_token: string } | null = null;
+    let lastStatus = 0;
+    let lastBody = "";
 
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error("Token exchange failed:", tokenResponse.status, errorText);
-      return Response.redirect(`${redirectBase}?lawmatics_error=token_exchange_failed`);
+    for (const tokenUrl of tokenUrls) {
+      console.log("Trying token endpoint:", tokenUrl);
+      
+      const tokenResponse = await fetch(tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: code,
+          redirect_uri: redirectUri,
+          client_id: lawmaticsClientId!,
+          client_secret: lawmaticsClientSecret!,
+        }),
+      });
+
+      lastStatus = tokenResponse.status;
+      
+      if (tokenResponse.ok) {
+        tokenData = await tokenResponse.json();
+        console.log("Token exchange successful with:", tokenUrl);
+        break;
+      }
+
+      lastBody = await tokenResponse.text();
+      console.error("Token exchange failed:", tokenUrl, lastStatus, lastBody);
+
+      // Only try next URL if 404 or 405 (endpoint not found/method not allowed)
+      if (lastStatus !== 404 && lastStatus !== 405) {
+        break;
+      }
     }
 
-    const tokenData = await tokenResponse.json();
+    if (!tokenData) {
+      // Truncate detail to max 200 chars and exclude any secrets
+      const safeDetail = lastBody.slice(0, 200).replace(/client_secret[^&]*/gi, "").replace(/access_token[^&]*/gi, "");
+      return Response.redirect(
+        `${redirectBase}?lawmatics_error=token_exchange_failed&status=${lastStatus}&detail=${encodeURIComponent(safeDetail)}`
+      );
+    }
     console.log("Token exchange successful");
 
     // Store the access token in the database
