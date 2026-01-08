@@ -13,6 +13,10 @@ serve(async (req) => {
   }
 
   try {
+    // Parse optional appUrl from request body
+    const body = await req.json().catch(() => ({}));
+    const appUrl = body.appUrl || req.headers.get("origin") || Deno.env.get("APP_BASE_URL") || "https://lovable.dev";
+
     const lawmaticsClientId = Deno.env.get("LAWMATICS_CLIENT_ID");
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
 
@@ -71,10 +75,11 @@ serve(async (req) => {
       );
     }
 
-    // Build state parameter with user ID and timestamp for validation
+    // Build state parameter with user ID, timestamp, and appUrl for validation
     const state = btoa(JSON.stringify({
       userId: userData.id,
       timestamp: Date.now(),
+      appUrl,
     }));
 
     // Build the Lawmatics authorization URL

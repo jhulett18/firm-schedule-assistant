@@ -296,6 +296,7 @@ const AdminSettings = () => {
 
       const { data, error } = await supabase.functions.invoke("lawmatics-oauth-start", {
         headers: { Authorization: `Bearer ${session.access_token}` },
+        body: { appUrl: window.location.origin },
       });
 
       if (error) throw error;
