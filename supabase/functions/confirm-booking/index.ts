@@ -23,8 +23,8 @@ interface MeetingDetails {
   meeting_type_id: string | null;
   room_id: string | null;
   booking_request_id: string | null;
-  meeting_types?: { name: string } | null;
-  rooms?: { name: string; resource_email: string } | null;
+  meeting_types?: { name: string; lawmatics_event_type_id: string | null } | null;
+  rooms?: { name: string; resource_email: string; lawmatics_location_id: string | null } | null;
   host_attorney?: { name: string; email: string } | null;
 }
 
@@ -205,13 +205,13 @@ serve(async (req) => {
       });
     }
 
-    // 2. Fetch meeting details with relations
+    // 2. Fetch meeting details with relations (including lawmatics mapping fields)
     const { data: meeting, error: meetingError } = await supabase
       .from("meetings")
       .select(`
         *,
-        meeting_types (name),
-        rooms (name, resource_email)
+        meeting_types (name, lawmatics_event_type_id),
+        rooms (name, resource_email, lawmatics_location_id)
       `)
       .eq("id", bookingRequest.meeting_id)
       .single();
@@ -288,7 +288,7 @@ serve(async (req) => {
         const client = meeting.external_attendees?.[0];
         const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
         
-        // Build description
+        // Build description with fallback info if mappings not set
         const descriptionParts = [
           `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
           `Duration: ${meeting.duration_minutes} minutes`,
@@ -299,12 +299,25 @@ serve(async (req) => {
           client?.phone ? `Client Phone: ${client.phone}` : null,
         ].filter(Boolean).join("\n");
 
-        const lawmaticsPayload = {
+        // Build Lawmatics payload with mappings
+        const lawmaticsPayload: Record<string, any> = {
           name: eventName,
           starts_at: startDatetime,
           ends_at: endDatetime,
           description: descriptionParts,
         };
+
+        // Add event_type_id if mapped
+        if (meeting.meeting_types?.lawmatics_event_type_id) {
+          lawmaticsPayload.event_type_id = meeting.meeting_types.lawmatics_event_type_id;
+          console.log("Using Lawmatics event_type_id:", meeting.meeting_types.lawmatics_event_type_id);
+        }
+
+        // Add location_id if mapped and in-person
+        if (meeting.location_mode === "InPerson" && meeting.rooms?.lawmatics_location_id) {
+          lawmaticsPayload.location_id = meeting.rooms.lawmatics_location_id;
+          console.log("Using Lawmatics location_id:", meeting.rooms.lawmatics_location_id);
+        }
 
         console.log("Creating Lawmatics event:", JSON.stringify(lawmaticsPayload));
 
@@ -404,6 +417,8 @@ serve(async (req) => {
         start_datetime: startDatetime,
         end_datetime: endDatetime,
         lawmatics_appointment_id: lawmaticsAppointmentId,
+        lawmatics_event_type_id: meeting.meeting_types?.lawmatics_event_type_id || null,
+        lawmatics_location_id: meeting.rooms?.lawmatics_location_id || null,
         room_reservation_mode: roomReservationMode,
         room_calendar_reserved: calendarRoomReservationResult?.success ?? null,
       },

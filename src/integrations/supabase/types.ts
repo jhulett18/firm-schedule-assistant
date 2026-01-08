@@ -215,6 +215,7 @@ export type Database = {
           allowed_location_modes: Database["public"]["Enums"]["allowed_location_modes"]
           created_at: string
           id: string
+          lawmatics_event_type_id: string | null
           name: string
           title_template: string
           updated_at: string
@@ -224,6 +225,7 @@ export type Database = {
           allowed_location_modes?: Database["public"]["Enums"]["allowed_location_modes"]
           created_at?: string
           id?: string
+          lawmatics_event_type_id?: string | null
           name: string
           title_template?: string
           updated_at?: string
@@ -233,6 +235,7 @@ export type Database = {
           allowed_location_modes?: Database["public"]["Enums"]["allowed_location_modes"]
           created_at?: string
           id?: string
+          lawmatics_event_type_id?: string | null
           name?: string
           title_template?: string
           updated_at?: string
@@ -470,6 +473,7 @@ export type Database = {
           active: boolean
           created_at: string
           id: string
+          lawmatics_location_id: string | null
           name: string
           resource_email: string
           updated_at: string
@@ -478,6 +482,7 @@ export type Database = {
           active?: boolean
           created_at?: string
           id?: string
+          lawmatics_location_id?: string | null
           name: string
           resource_email: string
           updated_at?: string
@@ -486,6 +491,7 @@ export type Database = {
           active?: boolean
           created_at?: string
           id?: string
+          lawmatics_location_id?: string | null
           name?: string
           resource_email?: string
           updated_at?: string

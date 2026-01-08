@@ -11,12 +11,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2 } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
 
 const AdminSettings = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
   const queryClient = useQueryClient();
 
   // Local state for contact fields
@@ -25,6 +28,12 @@ const AdminSettings = () => {
   const [contactMessage, setContactMessage] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [hasContactChanges, setHasContactChanges] = useState(false);
+
+  // Local state for mappings
+  const [meetingTypeMappings, setMeetingTypeMappings] = useState<Record<string, string>>({});
+  const [roomMappings, setRoomMappings] = useState<Record<string, string>>({});
+  const [hasMeetingTypeChanges, setHasMeetingTypeChanges] = useState(false);
+  const [hasRoomChanges, setHasRoomChanges] = useState(false);
 
   // Handle OAuth callback results
   useEffect(() => {
@@ -83,6 +92,32 @@ const AdminSettings = () => {
     },
   });
 
+  // Fetch meeting types
+  const { data: meetingTypes } = useQuery({
+    queryKey: ["meeting-types-all"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("meeting_types")
+        .select("id, name, lawmatics_event_type_id")
+        .order("name");
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  // Fetch rooms
+  const { data: rooms } = useQuery({
+    queryKey: ["rooms-all"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("rooms")
+        .select("id, name, resource_email, lawmatics_location_id")
+        .order("name");
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
   // Initialize contact fields from settings
   useEffect(() => {
     if (appSettings) {
@@ -98,6 +133,30 @@ const AdminSettings = () => {
       setHasContactChanges(false);
     }
   }, [appSettings]);
+
+  // Initialize meeting type mappings
+  useEffect(() => {
+    if (meetingTypes) {
+      const mappings: Record<string, string> = {};
+      meetingTypes.forEach(mt => {
+        mappings[mt.id] = mt.lawmatics_event_type_id || "";
+      });
+      setMeetingTypeMappings(mappings);
+      setHasMeetingTypeChanges(false);
+    }
+  }, [meetingTypes]);
+
+  // Initialize room mappings
+  useEffect(() => {
+    if (rooms) {
+      const mappings: Record<string, string> = {};
+      rooms.forEach(r => {
+        mappings[r.id] = r.lawmatics_location_id || "";
+      });
+      setRoomMappings(mappings);
+      setHasRoomChanges(false);
+    }
+  }, [rooms]);
 
   // Track changes to contact fields
   useEffect(() => {
@@ -116,7 +175,32 @@ const AdminSettings = () => {
     }
   }, [contactPhone, contactEmail, contactMessage, companyName, appSettings]);
 
+  // Track changes to meeting type mappings
+  useEffect(() => {
+    if (meetingTypes) {
+      const hasChanges = meetingTypes.some(mt => 
+        (meetingTypeMappings[mt.id] || "") !== (mt.lawmatics_event_type_id || "")
+      );
+      setHasMeetingTypeChanges(hasChanges);
+    }
+  }, [meetingTypeMappings, meetingTypes]);
+
+  // Track changes to room mappings
+  useEffect(() => {
+    if (rooms) {
+      const hasChanges = rooms.some(r => 
+        (roomMappings[r.id] || "") !== (r.lawmatics_location_id || "")
+      );
+      setHasRoomChanges(hasChanges);
+    }
+  }, [roomMappings, rooms]);
+
   const roomReservationMode = appSettings?.find(s => s.key === "room_reservation_mode")?.value || "LawmaticsSync";
+
+  // Get Lawmatics test results from settings
+  const lawmaticsLastTestAt = appSettings?.find(s => s.key === "lawmatics_last_test_at")?.value || "";
+  const lawmaticsLastTestOk = appSettings?.find(s => s.key === "lawmatics_last_test_ok")?.value === "true";
+  const lawmaticsLastTestError = appSettings?.find(s => s.key === "lawmatics_last_test_error")?.value || "";
 
   // Update setting mutation (for existing settings)
   const updateSettingMutation = useMutation({
@@ -213,6 +297,71 @@ const AdminSettings = () => {
       toast.error(`Failed to start Lawmatics connection: ${error.message}`);
     },
   });
+
+  // Test Lawmatics API
+  const testLawmatics = async () => {
+    setIsTesting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const { data, error } = await supabase.functions.invoke("lawmatics-test", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (error) throw error;
+
+      if (data?.ok) {
+        toast.success(data.message || "Lawmatics API connection verified!");
+      } else {
+        toast.error(data?.message || "Lawmatics API test failed");
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    } catch (error) {
+      toast.error(`Failed to test Lawmatics: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  // Save meeting type mappings
+  const saveMeetingTypeMappings = async () => {
+    try {
+      await Promise.all(
+        Object.entries(meetingTypeMappings).map(([id, value]) =>
+          supabase
+            .from("meeting_types")
+            .update({ lawmatics_event_type_id: value || null, updated_at: new Date().toISOString() })
+            .eq("id", id)
+        )
+      );
+      queryClient.invalidateQueries({ queryKey: ["meeting-types-all"] });
+      toast.success("Meeting type mappings saved");
+      setHasMeetingTypeChanges(false);
+    } catch (error) {
+      toast.error(`Failed to save mappings: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
+  };
+
+  // Save room mappings
+  const saveRoomMappings = async () => {
+    try {
+      await Promise.all(
+        Object.entries(roomMappings).map(([id, value]) =>
+          supabase
+            .from("rooms")
+            .update({ lawmatics_location_id: value || null, updated_at: new Date().toISOString() })
+            .eq("id", id)
+        )
+      );
+      queryClient.invalidateQueries({ queryKey: ["rooms-all"] });
+      toast.success("Room mappings saved");
+      setHasRoomChanges(false);
+    } catch (error) {
+      toast.error(`Failed to save mappings: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
+  };
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString("en-US", {
@@ -368,7 +517,8 @@ const AdminSettings = () => {
               Connect to Lawmatics to automatically create calendar events when bookings are confirmed
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-6">
+            {/* Connection Status */}
             {isLoadingLawmatics ? (
               <div className="flex items-center gap-2 text-muted-foreground">
                 <RefreshCw className="h-4 w-4 animate-spin" />
@@ -388,23 +538,68 @@ const AdminSettings = () => {
                     <p>Connected by: {(lawmaticsConnection.users as any).name}</p>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  onClick={() => connectMutation.mutate()}
-                  disabled={isConnecting}
-                >
-                  {isConnecting ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                      Reconnecting...
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Reconnect
-                    </>
-                  )}
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => connectMutation.mutate()}
+                    disabled={isConnecting}
+                  >
+                    {isConnecting ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Reconnecting...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Reconnect
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={testLawmatics}
+                    disabled={isTesting}
+                  >
+                    {isTesting ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Testing...
+                      </>
+                    ) : (
+                      <>
+                        <TestTube className="h-4 w-4 mr-2" />
+                        Test API
+                      </>
+                    )}
+                  </Button>
+                </div>
+                
+                {/* Test Results */}
+                {lawmaticsLastTestAt && (
+                  <div className="text-sm border rounded-md p-3 space-y-1 bg-muted/50">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">Last Test:</span>
+                      {lawmaticsLastTestOk ? (
+                        <Badge variant="outline" className="text-green-600 border-green-600">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Success
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-destructive border-destructive">
+                          <XCircle className="h-3 w-3 mr-1" />
+                          Failed
+                        </Badge>
+                      )}
+                      <span className="text-muted-foreground">
+                        {formatDistanceToNow(new Date(lawmaticsLastTestAt), { addSuffix: true })}
+                      </span>
+                    </div>
+                    {!lawmaticsLastTestOk && lawmaticsLastTestError && (
+                      <p className="text-destructive text-xs">{lawmaticsLastTestError}</p>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-4">
@@ -434,6 +629,113 @@ const AdminSettings = () => {
                   )}
                 </Button>
               </div>
+            )}
+
+            {/* Mappings Section - Only show when connected */}
+            {lawmaticsConnection && (
+              <>
+                {/* Meeting Type Mappings */}
+                <div className="space-y-3 pt-4 border-t">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-medium">Meeting Type → Event Type Mapping</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Map meeting types to Lawmatics event type IDs
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={saveMeetingTypeMappings}
+                      disabled={!hasMeetingTypeChanges}
+                    >
+                      <Save className="h-4 w-4 mr-1" />
+                      Save
+                    </Button>
+                  </div>
+                  {meetingTypes && meetingTypes.length > 0 ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Meeting Type</TableHead>
+                          <TableHead>Lawmatics Event Type ID</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {meetingTypes.map((mt) => (
+                          <TableRow key={mt.id}>
+                            <TableCell className="font-medium">{mt.name}</TableCell>
+                            <TableCell>
+                              <Input
+                                placeholder="Enter Lawmatics event type ID"
+                                value={meetingTypeMappings[mt.id] || ""}
+                                onChange={(e) => setMeetingTypeMappings(prev => ({
+                                  ...prev,
+                                  [mt.id]: e.target.value
+                                }))}
+                                className="max-w-xs"
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No meeting types configured.</p>
+                  )}
+                </div>
+
+                {/* Room Mappings */}
+                <div className="space-y-3 pt-4 border-t">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-medium">Room → Location Mapping</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Map rooms to Lawmatics location IDs (for in-person meetings)
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={saveRoomMappings}
+                      disabled={!hasRoomChanges}
+                    >
+                      <Save className="h-4 w-4 mr-1" />
+                      Save
+                    </Button>
+                  </div>
+                  {rooms && rooms.length > 0 ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Room</TableHead>
+                          <TableHead>Resource Email</TableHead>
+                          <TableHead>Lawmatics Location ID</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rooms.map((room) => (
+                          <TableRow key={room.id}>
+                            <TableCell className="font-medium">{room.name}</TableCell>
+                            <TableCell className="text-muted-foreground text-sm">{room.resource_email}</TableCell>
+                            <TableCell>
+                              <Input
+                                placeholder="Enter Lawmatics location ID"
+                                value={roomMappings[room.id] || ""}
+                                onChange={(e) => setRoomMappings(prev => ({
+                                  ...prev,
+                                  [room.id]: e.target.value
+                                }))}
+                                className="max-w-xs"
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No rooms configured.</p>
+                  )}
+                </div>
+              </>
             )}
           </CardContent>
         </Card>
