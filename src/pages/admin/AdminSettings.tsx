@@ -13,8 +13,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+
+interface LawmaticsItem {
+  id: string;
+  name: string;
+}
 
 const AdminSettings = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -34,6 +39,13 @@ const AdminSettings = () => {
   const [roomMappings, setRoomMappings] = useState<Record<string, string>>({});
   const [hasMeetingTypeChanges, setHasMeetingTypeChanges] = useState(false);
   const [hasRoomChanges, setHasRoomChanges] = useState(false);
+  
+  // Lawmatics reference data state
+  const [isLoadingLawmaticsData, setIsLoadingLawmaticsData] = useState(false);
+  const [lawmaticsEventTypes, setLawmaticsEventTypes] = useState<LawmaticsItem[]>([]);
+  const [lawmaticsLocations, setLawmaticsLocations] = useState<LawmaticsItem[]>([]);
+  const [lawmaticsDataFetchedAt, setLawmaticsDataFetchedAt] = useState<string | null>(null);
+  const [lawmaticsDataCached, setLawmaticsDataCached] = useState(false);
 
   // Handle OAuth callback results
   useEffect(() => {
@@ -322,6 +334,47 @@ const AdminSettings = () => {
       toast.error(`Failed to test Lawmatics: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setIsTesting(false);
+    }
+  };
+
+  // Load Lawmatics reference data
+  const loadLawmaticsData = async (forceRefresh = false) => {
+    setIsLoadingLawmaticsData(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const headers = { Authorization: `Bearer ${session.access_token}` };
+      const body = forceRefresh ? JSON.stringify({ forceRefresh: true }) : undefined;
+
+      // Fetch both in parallel
+      const [eventTypesRes, locationsRes] = await Promise.all([
+        supabase.functions.invoke("lawmatics-list-event-types", { headers, body }),
+        supabase.functions.invoke("lawmatics-list-locations", { headers, body }),
+      ]);
+
+      if (eventTypesRes.error) throw eventTypesRes.error;
+      if (locationsRes.error) throw locationsRes.error;
+
+      // Handle reconnect required
+      if (eventTypesRes.data?.reconnectRequired || locationsRes.data?.reconnectRequired) {
+        toast.error("Lawmatics token invalid - please reconnect");
+        return;
+      }
+
+      setLawmaticsEventTypes(eventTypesRes.data?.items || []);
+      setLawmaticsLocations(locationsRes.data?.items || []);
+      setLawmaticsDataFetchedAt(eventTypesRes.data?.fetched_at || locationsRes.data?.fetched_at);
+      setLawmaticsDataCached(eventTypesRes.data?.cached || locationsRes.data?.cached);
+
+      const eventCount = eventTypesRes.data?.items?.length || 0;
+      const locationCount = locationsRes.data?.items?.length || 0;
+      
+      toast.success(`Loaded ${eventCount} event types and ${locationCount} locations`);
+    } catch (error) {
+      toast.error(`Failed to load Lawmatics data: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsLoadingLawmaticsData(false);
     }
   };
 
@@ -634,13 +687,49 @@ const AdminSettings = () => {
             {/* Mappings Section - Only show when connected */}
             {lawmaticsConnection && (
               <>
+                {/* Load Lawmatics Data Button */}
+                <div className="flex items-center gap-4 pt-4 border-t">
+                  <Button
+                    variant="outline"
+                    onClick={() => loadLawmaticsData(false)}
+                    disabled={isLoadingLawmaticsData}
+                  >
+                    {isLoadingLawmaticsData ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="h-4 w-4 mr-2" />
+                        Load Lawmatics Data
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => loadLawmaticsData(true)}
+                    disabled={isLoadingLawmaticsData}
+                  >
+                    <RefreshCw className="h-4 w-4 mr-1" />
+                    Refresh
+                  </Button>
+                  {lawmaticsDataFetchedAt && (
+                    <span className="text-sm text-muted-foreground">
+                      Last fetched: {formatDistanceToNow(new Date(lawmaticsDataFetchedAt), { addSuffix: true })}
+                      {lawmaticsDataCached && " (cached)"}
+                    </span>
+                  )}
+                </div>
+
                 {/* Meeting Type Mappings */}
                 <div className="space-y-3 pt-4 border-t">
                   <div className="flex items-center justify-between">
                     <div>
                       <h4 className="font-medium">Meeting Type → Event Type Mapping</h4>
                       <p className="text-sm text-muted-foreground">
-                        Map meeting types to Lawmatics event type IDs
+                        Map meeting types to Lawmatics event types
                       </p>
                     </div>
                     <Button
@@ -657,7 +746,7 @@ const AdminSettings = () => {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Meeting Type</TableHead>
-                          <TableHead>Lawmatics Event Type ID</TableHead>
+                          <TableHead>Lawmatics Event Type</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -665,15 +754,42 @@ const AdminSettings = () => {
                           <TableRow key={mt.id}>
                             <TableCell className="font-medium">{mt.name}</TableCell>
                             <TableCell>
-                              <Input
-                                placeholder="Enter Lawmatics event type ID"
-                                value={meetingTypeMappings[mt.id] || ""}
-                                onChange={(e) => setMeetingTypeMappings(prev => ({
-                                  ...prev,
-                                  [mt.id]: e.target.value
-                                }))}
-                                className="max-w-xs"
-                              />
+                              {lawmaticsEventTypes.length > 0 ? (
+                                <Select
+                                  value={meetingTypeMappings[mt.id] || "none"}
+                                  onValueChange={(value) => setMeetingTypeMappings(prev => ({
+                                    ...prev,
+                                    [mt.id]: value === "none" ? "" : value
+                                  }))}
+                                >
+                                  <SelectTrigger className="max-w-xs">
+                                    <SelectValue placeholder="Select event type" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">— None —</SelectItem>
+                                    {lawmaticsEventTypes.map((et) => (
+                                      <SelectItem key={et.id} value={et.id}>
+                                        {et.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    placeholder="Load data or enter ID"
+                                    value={meetingTypeMappings[mt.id] || ""}
+                                    onChange={(e) => setMeetingTypeMappings(prev => ({
+                                      ...prev,
+                                      [mt.id]: e.target.value
+                                    }))}
+                                    className="max-w-xs"
+                                  />
+                                  <span className="text-xs text-muted-foreground">
+                                    Click "Load Lawmatics Data" for dropdown
+                                  </span>
+                                </div>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -690,7 +806,7 @@ const AdminSettings = () => {
                     <div>
                       <h4 className="font-medium">Room → Location Mapping</h4>
                       <p className="text-sm text-muted-foreground">
-                        Map rooms to Lawmatics location IDs (for in-person meetings)
+                        Map rooms to Lawmatics locations (for in-person meetings)
                       </p>
                     </div>
                     <Button
@@ -708,7 +824,7 @@ const AdminSettings = () => {
                         <TableRow>
                           <TableHead>Room</TableHead>
                           <TableHead>Resource Email</TableHead>
-                          <TableHead>Lawmatics Location ID</TableHead>
+                          <TableHead>Lawmatics Location</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -717,15 +833,42 @@ const AdminSettings = () => {
                             <TableCell className="font-medium">{room.name}</TableCell>
                             <TableCell className="text-muted-foreground text-sm">{room.resource_email}</TableCell>
                             <TableCell>
-                              <Input
-                                placeholder="Enter Lawmatics location ID"
-                                value={roomMappings[room.id] || ""}
-                                onChange={(e) => setRoomMappings(prev => ({
-                                  ...prev,
-                                  [room.id]: e.target.value
-                                }))}
-                                className="max-w-xs"
-                              />
+                              {lawmaticsLocations.length > 0 ? (
+                                <Select
+                                  value={roomMappings[room.id] || "none"}
+                                  onValueChange={(value) => setRoomMappings(prev => ({
+                                    ...prev,
+                                    [room.id]: value === "none" ? "" : value
+                                  }))}
+                                >
+                                  <SelectTrigger className="max-w-xs">
+                                    <SelectValue placeholder="Select location" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">— None —</SelectItem>
+                                    {lawmaticsLocations.map((loc) => (
+                                      <SelectItem key={loc.id} value={loc.id}>
+                                        {loc.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    placeholder="Load data or enter ID"
+                                    value={roomMappings[room.id] || ""}
+                                    onChange={(e) => setRoomMappings(prev => ({
+                                      ...prev,
+                                      [room.id]: e.target.value
+                                    }))}
+                                    className="max-w-xs"
+                                  />
+                                  <span className="text-xs text-muted-foreground">
+                                    Click "Load Lawmatics Data" for dropdown
+                                  </span>
+                                </div>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}

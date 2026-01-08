@@ -209,6 +209,24 @@ export type Database = {
           },
         ]
       }
+      lawmatics_reference_data: {
+        Row: {
+          data: Json
+          fetched_at: string
+          key: string
+        }
+        Insert: {
+          data?: Json
+          fetched_at?: string
+          key: string
+        }
+        Update: {
+          data?: Json
+          fetched_at?: string
+          key?: string
+        }
+        Relationships: []
+      }
       meeting_types: {
         Row: {
           active: boolean

@@ -50,3 +50,9 @@ verify_jwt = false
 
 [functions.google-busy-debug]
 verify_jwt = false
+
+[functions.lawmatics-list-event-types]
+verify_jwt = false
+
+[functions.lawmatics-list-locations]
+verify_jwt = false
