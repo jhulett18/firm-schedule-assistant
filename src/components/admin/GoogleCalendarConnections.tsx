@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Table,
   TableBody,
@@ -33,8 +34,21 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Calendar, CheckCircle, XCircle, RefreshCw, Eye, Link2, AlertCircle, Search, Unlink } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { 
+  Calendar, 
+  CheckCircle, 
+  XCircle, 
+  RefreshCw, 
+  Eye, 
+  Link2, 
+  AlertCircle, 
+  Search, 
+  Unlink,
+  ExternalLink,
+  MapPin,
+  Clock
+} from "lucide-react";
+import { formatDistanceToNow, format, parseISO, isToday, isTomorrow, startOfDay } from "date-fns";
 
 interface CalendarConnection {
   id: string;
@@ -62,6 +76,16 @@ interface CalendarInfo {
   selected: boolean;
 }
 
+interface CalendarEvent {
+  id: string;
+  summary: string;
+  start: { dateTime?: string; date?: string; timeZone?: string };
+  end: { dateTime?: string; date?: string; timeZone?: string };
+  location?: string;
+  htmlLink: string;
+  status: string;
+}
+
 export function GoogleCalendarConnections() {
   const { isAdmin, internalUser } = useAuth();
   const queryClient = useQueryClient();
@@ -71,6 +95,13 @@ export function GoogleCalendarConnections() {
   const [calendarSearch, setCalendarSearch] = useState("");
   const [isLoadingCalendars, setIsLoadingCalendars] = useState(false);
   const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [verifyingUserId, setVerifyingUserId] = useState<string | null>(null);
+  
+  // Events state
+  const [selectedCalendarId, setSelectedCalendarId] = useState<string>("primary");
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
+  const [eventsError, setEventsError] = useState<string | null>(null);
 
   // Fetch all calendar connections (admin sees all, staff sees own)
   const { data: connections, isLoading: loadingConnections } = useQuery({
@@ -106,6 +137,7 @@ export function GoogleCalendarConnections() {
   // Verify connection mutation
   const verifyMutation = useMutation({
     mutationFn: async (internalUserId: string) => {
+      setVerifyingUserId(internalUserId);
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
@@ -118,7 +150,7 @@ export function GoogleCalendarConnections() {
       return data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["google-calendar-connections"] });
+      queryClient.invalidateQueries({ queryKey: ["google-calendar-connections", isAdmin] });
       if (data.verified_ok) {
         toast.success("Google Calendar verified successfully");
       } else {
@@ -127,6 +159,9 @@ export function GoogleCalendarConnections() {
     },
     onError: (error) => {
       toast.error(`Failed to verify: ${error.message}`);
+    },
+    onSettled: () => {
+      setVerifyingUserId(null);
     },
   });
 
@@ -158,13 +193,46 @@ export function GoogleCalendarConnections() {
     },
   });
 
-  // View calendars
+  // Fetch events for selected calendar
+  const fetchEvents = async (internalUserId: string, calendarId: string) => {
+    setIsLoadingEvents(true);
+    setEventsError(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const { data, error } = await supabase.functions.invoke("google-list-events", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: { internalUserId, calendarId },
+      });
+
+      if (error) throw error;
+
+      if (data.error) {
+        setEventsError(data.error);
+        setEvents([]);
+      } else {
+        setEvents(data.events || []);
+      }
+    } catch (err) {
+      setEventsError(err instanceof Error ? err.message : "Failed to load events");
+      setEvents([]);
+    } finally {
+      setIsLoadingEvents(false);
+    }
+  };
+
+  // View calendars and events
   const handleViewCalendars = async (internalUserId: string) => {
     setViewingCalendars(internalUserId);
     setIsLoadingCalendars(true);
     setCalendarError(null);
     setCalendars([]);
     setCalendarSearch("");
+    setEvents([]);
+    setEventsError(null);
+    setSelectedCalendarId("primary");
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -180,13 +248,32 @@ export function GoogleCalendarConnections() {
       if (data.error) {
         setCalendarError(data.error);
       } else {
-        setCalendars(data.calendars || []);
+        const calendarList = data.calendars || [];
+        setCalendars(calendarList);
         queryClient.invalidateQueries({ queryKey: ["google-calendar-connections"] });
+
+        // Auto-select primary calendar or first one
+        const primaryCal = calendarList.find((c: CalendarInfo) => c.primary);
+        const defaultCalId = primaryCal?.id || calendarList[0]?.id || "primary";
+        setSelectedCalendarId(defaultCalId);
+
+        // Fetch events for the selected calendar
+        if (calendarList.length > 0) {
+          await fetchEvents(internalUserId, defaultCalId);
+        }
       }
     } catch (err) {
       setCalendarError(err instanceof Error ? err.message : "Failed to load calendars");
     } finally {
       setIsLoadingCalendars(false);
+    }
+  };
+
+  // Handle calendar selection change
+  const handleCalendarSelect = async (calendarId: string) => {
+    setSelectedCalendarId(calendarId);
+    if (viewingCalendars) {
+      await fetchEvents(viewingCalendars, calendarId);
     }
   };
 
@@ -222,6 +309,55 @@ export function GoogleCalendarConnections() {
       cal.summary.toLowerCase().includes(calendarSearch.toLowerCase()) ||
       cal.id.toLowerCase().includes(calendarSearch.toLowerCase())
   );
+
+  // Group events by date
+  const groupEventsByDate = (events: CalendarEvent[]) => {
+    const groups: { [key: string]: CalendarEvent[] } = {};
+    
+    events.forEach((event) => {
+      const dateStr = event.start.dateTime || event.start.date || "";
+      const date = dateStr ? startOfDay(parseISO(dateStr)).toISOString() : "unknown";
+      if (!groups[date]) groups[date] = [];
+      groups[date].push(event);
+    });
+
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  };
+
+  const formatEventTime = (event: CalendarEvent) => {
+    const startStr = event.start.dateTime || event.start.date;
+    const endStr = event.end.dateTime || event.end.date;
+    
+    if (!startStr) return "";
+
+    // All-day event
+    if (event.start.date && !event.start.dateTime) {
+      return "All day";
+    }
+
+    const start = parseISO(startStr);
+    const end = endStr ? parseISO(endStr) : null;
+    
+    if (end) {
+      return `${format(start, "h:mm a")} – ${format(end, "h:mm a")}`;
+    }
+    return format(start, "h:mm a");
+  };
+
+  const formatDateHeader = (dateStr: string) => {
+    if (dateStr === "unknown") return "Unknown date";
+    const date = parseISO(dateStr);
+    if (isToday(date)) return "Today";
+    if (isTomorrow(date)) return "Tomorrow";
+    return format(date, "EEEE, MMMM d");
+  };
+
+  const openGoogleCalendar = (calendarId: string) => {
+    const url = `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(calendarId)}`;
+    window.open(url, "_blank");
+  };
+
+  const groupedEvents = groupEventsByDate(events);
 
   return (
     <>
@@ -302,9 +438,9 @@ export function GoogleCalendarConnections() {
                           variant="outline"
                           size="sm"
                           onClick={() => verifyMutation.mutate(conn.user_id)}
-                          disabled={verifyMutation.isPending}
+                          disabled={verifyingUserId === conn.user_id}
                         >
-                          {verifyMutation.isPending ? (
+                          {verifyingUserId === conn.user_id ? (
                             <RefreshCw className="h-4 w-4 animate-spin" />
                           ) : (
                             <RefreshCw className="h-4 w-4" />
@@ -386,13 +522,13 @@ export function GoogleCalendarConnections() {
         </CardContent>
       </Card>
 
-      {/* View Calendars Dialog */}
+      {/* View Calendars & Events Dialog */}
       <Dialog open={viewingCalendars !== null} onOpenChange={(open) => !open && setViewingCalendars(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh]">
+        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>Google Calendars</DialogTitle>
+            <DialogTitle>Google Calendar</DialogTitle>
             <DialogDescription>
-              Calendars available in this Google account
+              View calendars and upcoming events
             </DialogDescription>
           </DialogHeader>
 
@@ -420,46 +556,144 @@ export function GoogleCalendarConnections() {
               <p>No calendars found in this account.</p>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search calendars..."
-                  value={calendarSearch}
-                  onChange={(e) => setCalendarSearch(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
-
-              <div className="max-h-[400px] overflow-y-auto space-y-2">
-                {filteredCalendars.map((cal) => (
-                  <div
-                    key={cal.id}
-                    className="flex items-start justify-between p-3 rounded-lg border bg-card"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium truncate">{cal.summary}</div>
-                      <div className="text-xs text-muted-foreground truncate">{cal.id}</div>
-                      <div className="text-xs text-muted-foreground mt-1">
-                        Timezone: {cal.timeZone}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-1 ml-2 shrink-0">
-                      {cal.primary && (
-                        <Badge variant="default" className="text-xs">Primary</Badge>
-                      )}
-                      {cal.selected && (
-                        <Badge variant="secondary" className="text-xs">Selected</Badge>
-                      )}
-                      <Badge variant="outline" className="text-xs">{cal.accessRole}</Badge>
-                    </div>
+            <div className="flex flex-1 gap-4 min-h-0 overflow-hidden">
+              {/* Left: Calendars list */}
+              <div className="w-1/3 flex flex-col min-h-0">
+                <div className="mb-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search calendars..."
+                      value={calendarSearch}
+                      onChange={(e) => setCalendarSearch(e.target.value)}
+                      className="pl-9"
+                    />
                   </div>
-                ))}
+                </div>
+
+                <ScrollArea className="flex-1">
+                  <div className="space-y-1 pr-2">
+                    {filteredCalendars.map((cal) => (
+                      <div
+                        key={cal.id}
+                        className={`p-2 rounded-lg border cursor-pointer transition-colors ${
+                          selectedCalendarId === cal.id 
+                            ? "bg-primary/10 border-primary" 
+                            : "bg-card hover:bg-muted"
+                        }`}
+                        onClick={() => handleCalendarSelect(cal.id)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-sm truncate">{cal.summary}</div>
+                            <div className="text-xs text-muted-foreground truncate">{cal.timeZone}</div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            {cal.primary && (
+                              <Badge variant="default" className="text-xs">Primary</Badge>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openGoogleCalendar(cal.id);
+                              }}
+                              title="Open in Google Calendar"
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
               </div>
 
-              <p className="text-sm text-muted-foreground">
-                Showing {filteredCalendars.length} of {calendars.length} calendars
-              </p>
+              {/* Right: Events list */}
+              <div className="w-2/3 flex flex-col min-h-0 border-l pl-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-medium text-sm">Upcoming Events (14 days)</h3>
+                  {isLoadingEvents && (
+                    <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+
+                {eventsError ? (
+                  <div className="text-center py-6">
+                    <XCircle className="h-8 w-8 mx-auto mb-2 text-destructive opacity-50" />
+                    <p className="text-sm text-destructive">{eventsError}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() => viewingCalendars && fetchEvents(viewingCalendars, selectedCalendarId)}
+                    >
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Retry
+                    </Button>
+                  </div>
+                ) : isLoadingEvents ? (
+                  <div className="flex items-center justify-center py-8 text-muted-foreground">
+                    <RefreshCw className="h-5 w-5 animate-spin mr-2" />
+                    Loading events...
+                  </div>
+                ) : events.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Calendar className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">No events in the next 14 days.</p>
+                  </div>
+                ) : (
+                  <ScrollArea className="flex-1">
+                    <div className="space-y-4 pr-2">
+                      {groupedEvents.map(([dateKey, dateEvents]) => (
+                        <div key={dateKey}>
+                          <h4 className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
+                            {formatDateHeader(dateKey)}
+                          </h4>
+                          <div className="space-y-2">
+                            {dateEvents.map((event) => (
+                              <div
+                                key={event.id}
+                                className="p-2 rounded border bg-card text-sm"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium truncate">{event.summary}</div>
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                                      <Clock className="h-3 w-3" />
+                                      <span>{formatEventTime(event)}</span>
+                                    </div>
+                                    {event.location && (
+                                      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+                                        <MapPin className="h-3 w-3" />
+                                        <span className="truncate">{event.location}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {event.htmlLink && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 w-6 p-0 shrink-0"
+                                      onClick={() => window.open(event.htmlLink, "_blank")}
+                                      title="Open event"
+                                    >
+                                      <ExternalLink className="h-3 w-3" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                )}
+              </div>
             </div>
           )}
         </DialogContent>

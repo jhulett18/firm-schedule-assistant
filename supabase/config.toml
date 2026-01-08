@@ -28,10 +28,13 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.google-connection-status]
-verify_jwt = true
+verify_jwt = false
 
 [functions.google-list-calendars]
-verify_jwt = true
+verify_jwt = false
 
 [functions.google-disconnect]
+verify_jwt = false
+
+[functions.google-list-events]
 verify_jwt = false
