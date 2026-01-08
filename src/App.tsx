@@ -23,6 +23,9 @@ import AdminMeetingTypes from "./pages/admin/AdminMeetingTypes";
 import AdminPresets from "./pages/admin/AdminPresets";
 import AdminSchedulerMapping from "./pages/admin/AdminSchedulerMapping";
 import AdminSettings from "./pages/admin/AdminSettings";
+import Home from "./pages/Home";
+import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +39,10 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
+            {/* Public legal pages - no auth required */}
+            <Route path="/home" element={<Home />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/terms" element={<Terms />} />
             {/* Public routes - no auth required */}
             <Route path="/access" element={<Access />} />
             <Route path="/client" element={<ClientHome />} />
