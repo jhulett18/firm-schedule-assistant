@@ -21,6 +21,9 @@ verify_jwt = false
 [functions.lawmatics-oauth-callback]
 verify_jwt = false
 
+[functions.lawmatics-test]
+verify_jwt = false
+
 [functions.public-booking-info]
 verify_jwt = false
 
