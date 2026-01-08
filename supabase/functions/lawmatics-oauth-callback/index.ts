@@ -14,35 +14,57 @@ serve(async (req) => {
     const lawmaticsClientId = Deno.env.get("LAWMATICS_CLIENT_ID");
     const lawmaticsClientSecret = Deno.env.get("LAWMATICS_CLIENT_SECRET");
 
-    // Base redirect URL for the admin settings page
-    const appBaseUrl = Deno.env.get("APP_BASE_URL") || "https://lovable.dev";
-    const redirectBase = `${appBaseUrl}/admin/settings`;
+    // Base redirect URL from environment
+    const envBaseUrl = Deno.env.get("APP_BASE_URL") || "https://lovable.dev";
 
-    // Handle OAuth errors
+    // Helper to validate redirect URL (prevent open redirect)
+    const validateRedirectUrl = (stateBase: string | undefined): string => {
+      if (!stateBase) return envBaseUrl;
+      
+      // Allow if matches env base, ends with .lovable.app, or is localhost
+      if (
+        stateBase.startsWith(envBaseUrl) ||
+        stateBase.endsWith(".lovable.app") ||
+        stateBase.includes("localhost")
+      ) {
+        return stateBase;
+      }
+      
+      console.log("Invalid redirect URL in state, falling back to env:", stateBase);
+      return envBaseUrl;
+    };
+
+    // Handle OAuth errors (use env base for early errors before state is parsed)
     if (error) {
       console.error("OAuth error from Lawmatics:", error);
-      return Response.redirect(`${redirectBase}?lawmatics_error=${encodeURIComponent(error)}`);
+      return Response.redirect(`${envBaseUrl}/admin/settings?lawmatics_error=${encodeURIComponent(error)}`);
     }
 
     // Validate required parameters
     if (!code || !state) {
       console.error("Missing code or state parameter");
-      return Response.redirect(`${redirectBase}?lawmatics_error=missing_params`);
+      return Response.redirect(`${envBaseUrl}/admin/settings?lawmatics_error=missing_params`);
     }
 
     // Validate state parameter
-    let stateData;
+    let stateData: { userId: string; timestamp: number; appUrl?: string };
+    let redirectBase: string;
     try {
       stateData = JSON.parse(atob(state));
       const stateAge = Date.now() - stateData.timestamp;
-      // State should be less than 10 minutes old
-      if (stateAge > 10 * 60 * 1000) {
+      
+      // Validate redirect URL from state
+      const validatedBase = validateRedirectUrl(stateData.appUrl);
+      redirectBase = `${validatedBase}/admin/settings`;
+      
+      // State should be less than 60 minutes old (increased for admin setup)
+      if (stateAge > 60 * 60 * 1000) {
         console.error("State expired, age:", stateAge);
         return Response.redirect(`${redirectBase}?lawmatics_error=state_expired`);
       }
     } catch (e) {
       console.error("Invalid state parameter:", e);
-      return Response.redirect(`${redirectBase}?lawmatics_error=invalid_state`);
+      return Response.redirect(`${envBaseUrl}/admin/settings?lawmatics_error=invalid_state`);
     }
 
     // Exchange authorization code for access token
@@ -96,8 +118,8 @@ serve(async (req) => {
     return Response.redirect(`${redirectBase}?lawmatics_success=true`);
   } catch (error) {
     console.error("Error in lawmatics-oauth-callback:", error);
-    const appBaseUrl = Deno.env.get("APP_BASE_URL") || "https://lovable.dev";
+    const envBaseUrl = Deno.env.get("APP_BASE_URL") || "https://lovable.dev";
     const errorMsg = error instanceof Error ? error.message : "Unknown error";
-    return Response.redirect(`${appBaseUrl}/admin/settings?lawmatics_error=${encodeURIComponent(errorMsg)}`);
+    return Response.redirect(`${envBaseUrl}/admin/settings?lawmatics_error=${encodeURIComponent(errorMsg)}`);
   }
 });
