@@ -14,10 +14,31 @@ serve(async (req) => {
   try {
     const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 
     if (!GOOGLE_CLIENT_ID) {
       throw new Error("GOOGLE_CLIENT_ID not configured");
     }
+
+    // Capture the calling app origin for redirect after OAuth
+    let appUrl = req.headers.get("origin");
+    if (!appUrl) {
+      const referer = req.headers.get("referer");
+      if (referer) {
+        try {
+          const refererUrl = new URL(referer);
+          appUrl = refererUrl.origin;
+        } catch {
+          // Invalid referer, will use fallback
+        }
+      }
+    }
+    // Fallback to APP_URL env var
+    if (!appUrl) {
+      appUrl = Deno.env.get("APP_URL") || "https://lovable.dev";
+    }
+
+    console.log("Captured app origin for OAuth redirect:", appUrl);
 
     // Get the user from the request
     const authHeader = req.headers.get("Authorization");
@@ -30,7 +51,7 @@ serve(async (req) => {
 
     const supabase = createClient(
       SUPABASE_URL!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
+      SUPABASE_ANON_KEY!,
       { global: { headers: { Authorization: authHeader } } }
     );
 
@@ -56,10 +77,11 @@ serve(async (req) => {
       });
     }
 
-    // Generate state with user ID for security
+    // Generate state with user ID and app URL for redirect
     const state = btoa(JSON.stringify({
       userId: internalUser.id,
       timestamp: Date.now(),
+      appUrl: appUrl,
     }));
 
     const redirectUri = `${SUPABASE_URL}/functions/v1/google-oauth-callback`;
@@ -75,7 +97,7 @@ serve(async (req) => {
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("scope", scopes);
     authUrl.searchParams.set("access_type", "offline");
-    authUrl.searchParams.set("prompt", "consent");
+    authUrl.searchParams.set("prompt", "consent select_account");
     authUrl.searchParams.set("state", state);
 
     console.log("Generated OAuth URL for user:", internalUser.id);
