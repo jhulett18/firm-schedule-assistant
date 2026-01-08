@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download, Unlink } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface LawmaticsItem {
@@ -25,6 +25,7 @@ const AdminSettings = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [isConnecting, setIsConnecting] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const queryClient = useQueryClient();
 
   // Local state for contact fields
@@ -338,6 +339,39 @@ const AdminSettings = () => {
     }
   };
 
+  // Disconnect Lawmatics
+  const disconnectLawmatics = async () => {
+    if (!confirm("Are you sure you want to disconnect Lawmatics? This will remove the connection and clear cached data.")) {
+      return;
+    }
+    
+    setIsDisconnecting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const { data, error } = await supabase.functions.invoke("lawmatics-disconnect", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (error) throw error;
+
+      if (data?.disconnected) {
+        toast.success("Lawmatics disconnected successfully");
+        setLawmaticsEventTypes([]);
+        setLawmaticsLocations([]);
+        setLawmaticsDataFetchedAt(null);
+        queryClient.invalidateQueries({ queryKey: ["lawmatics-connection"] });
+      } else {
+        toast.info(data?.message || "No connection to disconnect");
+      }
+    } catch (error) {
+      toast.error(`Failed to disconnect Lawmatics: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsDisconnecting(false);
+    }
+  };
+
   // Load Lawmatics reference data
   const loadLawmaticsData = async (forceRefresh = false) => {
     setIsLoadingLawmaticsData(true);
@@ -592,11 +626,11 @@ const AdminSettings = () => {
                     <p>Connected by: {(lawmaticsConnection.users as any).name}</p>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <Button
                     variant="outline"
                     onClick={() => connectMutation.mutate()}
-                    disabled={isConnecting}
+                    disabled={isConnecting || isDisconnecting}
                   >
                     {isConnecting ? (
                       <>
@@ -613,7 +647,7 @@ const AdminSettings = () => {
                   <Button
                     variant="outline"
                     onClick={testLawmatics}
-                    disabled={isTesting}
+                    disabled={isTesting || isDisconnecting}
                   >
                     {isTesting ? (
                       <>
@@ -624,6 +658,24 @@ const AdminSettings = () => {
                       <>
                         <TestTube className="h-4 w-4 mr-2" />
                         Test API
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={disconnectLawmatics}
+                    disabled={isDisconnecting || isConnecting}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    {isDisconnecting ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Disconnecting...
+                      </>
+                    ) : (
+                      <>
+                        <Unlink className="h-4 w-4 mr-2" />
+                        Disconnect
                       </>
                     )}
                   </Button>

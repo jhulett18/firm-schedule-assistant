@@ -56,3 +56,6 @@ verify_jwt = false
 
 [functions.lawmatics-list-locations]
 verify_jwt = false
+
+[functions.lawmatics-disconnect]
+verify_jwt = false
