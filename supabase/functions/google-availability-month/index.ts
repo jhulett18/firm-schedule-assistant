@@ -259,7 +259,6 @@ serve(async (req) => {
     const businessStart = body.businessStart || "09:00";
     const businessEnd = body.businessEnd || "17:00";
     const timezone = body.timezone || "America/New_York";
-    const calendarIds = body.calendarIds || ["primary"];
 
     // Admin check
     const { data: adminRole } = await supabase
@@ -290,10 +289,18 @@ serve(async (req) => {
 
     if (!connection) {
       return new Response(
-        JSON.stringify({ error: "No Google connection found", days: [] }),
+        JSON.stringify({ error: "No Google connection found", days: [], calendarsChecked: [] }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Determine calendars to check - use passed calendarIds, or connection.selected_calendar_ids, or fallback to ["primary"]
+    const calendarsToCheck =
+      Array.isArray(body.calendarIds) && body.calendarIds.length
+        ? body.calendarIds
+        : (connection.selected_calendar_ids?.length ? connection.selected_calendar_ids : ["primary"]);
+
+    console.log("Calendars to check for availability:", calendarsToCheck);
 
     let accessToken = connection.access_token;
     const now = new Date();
@@ -316,14 +323,14 @@ serve(async (req) => {
     console.log(`Fetching availability for month ${month}/${year}, from ${timeMin} to ${timeMax}`);
 
     // Fetch busy intervals
-    let busyResult = await getBusyIntervals(accessToken, calendarIds, timeMin, timeMax);
+    let busyResult = await getBusyIntervals(accessToken, calendarsToCheck, timeMin, timeMax);
 
     // Retry on 401
     if (busyResult.error === "AUTH_EXPIRED" && connection.refresh_token) {
       console.log("Got 401, attempting token refresh...");
       const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
       if (refreshResult) {
-        busyResult = await getBusyIntervals(refreshResult.access_token, calendarIds, timeMin, timeMax);
+        busyResult = await getBusyIntervals(refreshResult.access_token, calendarsToCheck, timeMin, timeMax);
       } else {
         busyResult = { busy: [], error: "Token refresh failed" };
       }
@@ -362,7 +369,7 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ days, error: null }),
+      JSON.stringify({ days, error: null, calendarsChecked: calendarsToCheck }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
