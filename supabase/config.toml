@@ -34,4 +34,4 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.google-disconnect]
-verify_jwt = true
+verify_jwt = false
