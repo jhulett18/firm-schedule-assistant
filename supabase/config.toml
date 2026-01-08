@@ -38,3 +38,9 @@ verify_jwt = false
 
 [functions.google-list-events]
 verify_jwt = false
+
+[functions.google-availability-month]
+verify_jwt = false
+
+[functions.google-availability-day]
+verify_jwt = false
