@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -26,9 +26,37 @@ import {
   ChevronRight,
   AlertCircle,
   TestTube,
-  Terminal
+  Terminal,
+  RotateCcw,
+  Copy,
+  Bug,
+  XCircle
 } from "lucide-react";
 import { format } from "date-fns";
+import { copyToClipboard } from "@/lib/clipboard";
+
+// ========== STATE MACHINE ==========
+type FlowState = 
+  | "idle"
+  | "loading_calendars"
+  | "creating_test_request"
+  | "loading_availability"
+  | "ready_to_select_slot"
+  | "confirming"
+  | "success"
+  | "error"
+  | "timeout";
+
+type WizardStep = "calendar" | "options" | "availability" | "confirm" | "processing" | "done";
+
+// ========== TIMEOUTS ==========
+const TIMEOUTS = {
+  calendars: 15000,
+  create_test_request: 15000,
+  availability: 20000,
+  confirm_booking: 45000,
+  polling_max: 60000,
+};
 
 interface TimeSlot {
   start: string;
@@ -45,20 +73,46 @@ interface ProgressLog {
   created_at: string;
 }
 
+interface DebugInfo {
+  currentState: FlowState;
+  lastAction: string;
+  lastFunction: string;
+  lastError: ErrorDetails | null;
+  debugData: Record<string, any>;
+}
+
+interface ErrorDetails {
+  functionName: string;
+  statusCode?: number;
+  message: string;
+  responseExcerpt?: string;
+  step?: string;
+  timestamp: string;
+}
+
 interface TestMyBookingWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-type WizardStep = "calendar" | "options" | "availability" | "confirm" | "processing" | "done";
-
 export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardProps) {
+  // ========== STATE ==========
   const [currentStep, setCurrentStep] = useState<WizardStep>("calendar");
+  const [flowState, setFlowState] = useState<FlowState>("idle");
+  
+  // Debug info
+  const [debugInfo, setDebugInfo] = useState<DebugInfo>({
+    currentState: "idle",
+    lastAction: "none",
+    lastFunction: "none",
+    lastError: null,
+    debugData: {},
+  });
+  const [showDebugPanel, setShowDebugPanel] = useState(true);
   
   // Step 1: Calendar selection
   const [selectedCalendarId, setSelectedCalendarId] = useState<string>("");
   const [calendars, setCalendars] = useState<any[]>([]);
-  const [isLoadingCalendars, setIsLoadingCalendars] = useState(false);
   
   // Step 2: Options
   const [selectedMeetingTypeId, setSelectedMeetingTypeId] = useState<string>("");
@@ -70,13 +124,18 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
   // Step 3: Availability
   const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
-  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+  const [availabilityDebug, setAvailabilityDebug] = useState<Record<string, any>>({});
   
   // Step 4+: Booking
   const [meetingId, setMeetingId] = useState<string | null>(null);
   const [runId, setRunId] = useState<string>("");
   const [progressLogs, setProgressLogs] = useState<ProgressLog[]>([]);
   const [bookingResult, setBookingResult] = useState<any>(null);
+  
+  // Refs for cleanup
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const pollingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingStartRef = useRef<number>(0);
   
   // Fetch meeting types
   const { data: meetingTypes } = useQuery({
@@ -106,103 +165,200 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
     },
   });
   
-  // Load calendars on open
-  useEffect(() => {
-    if (open && currentStep === "calendar" && calendars.length === 0) {
-      loadCalendars();
-    }
-  }, [open, currentStep]);
+  // ========== HELPERS ==========
+  const updateDebug = useCallback((updates: Partial<DebugInfo>) => {
+    setDebugInfo(prev => ({ ...prev, ...updates }));
+  }, []);
   
-  // Subscribe to progress logs
-  useEffect(() => {
-    if (!meetingId || !runId || currentStep !== "processing") return;
-    
-    // Initial fetch
-    fetchProgressLogs();
-    
-    // Subscribe to realtime updates
-    const channel = supabase
-      .channel(`progress-${runId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "booking_progress_logs",
-          filter: `run_id=eq.${runId}`,
-        },
-        (payload) => {
-          const newLog = payload.new as ProgressLog;
-          setProgressLogs((prev) => [...prev, newLog]);
-          
-          // Check if done
-          if (newLog.step === "done") {
-            setTimeout(() => setCurrentStep("done"), 500);
-          }
-        }
-      )
-      .subscribe();
-    
-    return () => {
-      supabase.removeChannel(channel);
+  const setError = useCallback((functionName: string, error: any, step?: string) => {
+    const errorDetails: ErrorDetails = {
+      functionName,
+      statusCode: error?.status || error?.statusCode,
+      message: error?.message || String(error),
+      responseExcerpt: typeof error === 'object' ? JSON.stringify(error).slice(0, 500) : String(error).slice(0, 500),
+      step,
+      timestamp: new Date().toISOString(),
     };
-  }, [meetingId, runId, currentStep]);
+    
+    setFlowState("error");
+    updateDebug({
+      currentState: "error",
+      lastError: errorDetails,
+      lastFunction: functionName,
+      lastAction: `Error in ${functionName}`,
+    });
+    
+    console.error(`[TestMyBooking] Error in ${functionName}:`, error);
+  }, [updateDebug]);
   
-  const fetchProgressLogs = async () => {
-    if (!meetingId || !runId) return;
-    
-    const { data } = await supabase
-      .from("booking_progress_logs")
-      .select("*")
-      .eq("meeting_id", meetingId)
-      .eq("run_id", runId)
-      .order("created_at", { ascending: true });
-    
-    if (data) {
-      setProgressLogs(data);
-      const doneLog = data.find((l) => l.step === "done");
-      if (doneLog) {
-        setCurrentStep("done");
-      }
+  const setTimeout_ = useCallback((step: string, timeoutMs: number): AbortController => {
+    // Cleanup previous
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
-  };
+    
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    
+    const timeoutId = window.setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort();
+        setFlowState("timeout");
+        updateDebug({
+          currentState: "timeout",
+          lastAction: `Timeout after ${timeoutMs}ms`,
+          lastError: {
+            functionName: step,
+            message: `Operation timed out after ${timeoutMs / 1000}s`,
+            step,
+            timestamp: new Date().toISOString(),
+          },
+        });
+        toast.error(`${step} timed out after ${timeoutMs / 1000}s`);
+      }
+    }, timeoutMs);
+    
+    // Clear timeout if aborted early
+    controller.signal.addEventListener('abort', () => {
+      window.clearTimeout(timeoutId);
+    });
+    
+    return controller;
+  }, [updateDebug]);
   
-  const loadCalendars = async () => {
-    setIsLoadingCalendars(true);
+  const clearAllTimeouts = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (pollingTimeoutRef.current) {
+      clearTimeout(pollingTimeoutRef.current);
+      pollingTimeoutRef.current = null;
+    }
+  }, []);
+  
+  // ========== RESET ==========
+  const handleReset = useCallback(() => {
+    clearAllTimeouts();
+    
+    setCurrentStep("calendar");
+    setFlowState("idle");
+    setSelectedCalendarId("");
+    setCalendars([]);
+    setSelectedMeetingTypeId("");
+    setDurationMinutes(60);
+    setLocationMode("Zoom");
+    setSelectedRoomId("");
+    setSendInvites(false);
+    setAvailableSlots([]);
+    setSelectedSlot(null);
+    setAvailabilityDebug({});
+    setMeetingId(null);
+    setRunId("");
+    setProgressLogs([]);
+    setBookingResult(null);
+    
+    setDebugInfo({
+      currentState: "idle",
+      lastAction: "Reset",
+      lastFunction: "none",
+      lastError: null,
+      debugData: {},
+    });
+    
+    toast.info("Test wizard reset");
+  }, [clearAllTimeouts]);
+  
+  // ========== COPY DEBUG REPORT ==========
+  const handleCopyDebugReport = useCallback(async () => {
+    const report = {
+      timestamp: new Date().toISOString(),
+      currentStep,
+      flowState,
+      selectedCalendarId,
+      selectedMeetingTypeId,
+      durationMinutes,
+      locationMode,
+      selectedRoomId,
+      meetingId,
+      runId,
+      slotsCount: availableSlots.length,
+      availabilityDebug,
+      debugInfo,
+      progressLogsCount: progressLogs.length,
+      lastProgressLog: progressLogs[progressLogs.length - 1] || null,
+    };
+    
+    const success = await copyToClipboard(JSON.stringify(report, null, 2));
+    if (success) {
+      toast.success("Debug report copied to clipboard");
+    } else {
+      toast.error("Failed to copy debug report");
+    }
+  }, [currentStep, flowState, selectedCalendarId, selectedMeetingTypeId, durationMinutes, locationMode, selectedRoomId, meetingId, runId, availableSlots, availabilityDebug, debugInfo, progressLogs]);
+  
+  // ========== LOAD CALENDARS ==========
+  const loadCalendars = useCallback(async () => {
+    const functionName = "google-list-calendars";
+    
     try {
+      setFlowState("loading_calendars");
+      updateDebug({ currentState: "loading_calendars", lastAction: "Loading calendars", lastFunction: functionName });
+      
+      const controller = setTimeout_("calendars", TIMEOUTS.calendars);
+      
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
       
-      const { data, error } = await supabase.functions.invoke("google-list-calendars", {
+      if (controller.signal.aborted) return;
+      
+      const { data, error } = await supabase.functions.invoke(functionName, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       
-      if (error) throw error;
+      if (controller.signal.aborted) return;
+      controller.abort(); // Clear timeout on success
       
-      setCalendars(data?.calendars || []);
+      if (error) {
+        throw { message: error.message, status: error.status || 500, functionName };
+      }
+      
+      // Handle structured response
+      if (data?.ok === false) {
+        throw { message: data.error?.message || "Unknown error", status: data.error?.status, functionName };
+      }
+      
+      const calendarsData = data?.calendars || data?.data?.calendars || [];
+      setCalendars(calendarsData);
       
       // Auto-select primary if available
-      const primary = data?.calendars?.find((c: any) => c.primary);
+      const primary = calendarsData.find((c: any) => c.primary);
       if (primary) {
         setSelectedCalendarId(primary.id);
       }
-    } catch (err) {
-      toast.error("Failed to load calendars");
-      console.error(err);
-    } finally {
-      setIsLoadingCalendars(false);
+      
+      setFlowState("idle");
+      updateDebug({
+        currentState: "idle",
+        lastAction: `Loaded ${calendarsData.length} calendars`,
+        debugData: { ...debugInfo.debugData, calendarsCount: calendarsData.length },
+      });
+      
+    } catch (err: any) {
+      if (flowState === "timeout") return; // Already handled
+      setError(functionName, err, "loading_calendars");
     }
-  };
+  }, [setTimeout_, setError, updateDebug, flowState, debugInfo.debugData]);
   
-  const handleNextFromCalendar = () => {
-    if (!selectedCalendarId) {
-      toast.error("Please select a calendar");
-      return;
+  // Load calendars on open
+  useEffect(() => {
+    if (open && currentStep === "calendar" && calendars.length === 0 && flowState === "idle") {
+      loadCalendars();
     }
-    setCurrentStep("options");
-  };
+  }, [open, currentStep, calendars.length, flowState, loadCalendars]);
   
-  const handleNextFromOptions = async () => {
+  // ========== CREATE TEST REQUEST + LOAD AVAILABILITY ==========
+  const handleNextFromOptions = useCallback(async () => {
     if (!selectedMeetingTypeId) {
       toast.error("Please select a meeting type");
       return;
@@ -212,12 +368,20 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       return;
     }
     
-    // Create test booking request
+    let createdMeetingId: string | null = null;
+    
+    // Step 1: Create test booking request
     try {
-      setIsLoadingSlots(true);
+      setFlowState("creating_test_request");
+      setCurrentStep("availability"); // Move to availability step immediately to show loading
+      updateDebug({ currentState: "creating_test_request", lastAction: "Creating test request", lastFunction: "create-test-booking-request" });
+      
+      const controller = setTimeout_("create_test_request", TIMEOUTS.create_test_request);
       
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
+      
+      if (controller.signal.aborted) return;
       
       const { data, error } = await supabase.functions.invoke("create-test-booking-request", {
         headers: { Authorization: `Bearer ${session.access_token}` },
@@ -231,59 +395,108 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
         },
       });
       
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Failed to create test booking");
+      if (controller.signal.aborted) return;
+      controller.abort();
       
-      setMeetingId(data.meetingId);
+      if (error) {
+        throw { message: error.message, status: error.status || 500, functionName: "create-test-booking-request" };
+      }
       
-      // Load available slots
-      await loadAvailableSlots(data.meetingId);
-      setCurrentStep("availability");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create booking");
-      console.error(err);
-    } finally {
-      setIsLoadingSlots(false);
+      if (data?.ok === false || !data?.success) {
+        throw { message: data?.error?.message || data?.error || "Failed to create test booking", status: data?.error?.status };
+      }
+      
+      createdMeetingId = data.meetingId;
+      setMeetingId(createdMeetingId);
+      
+      updateDebug({
+        lastAction: `Created meeting ${createdMeetingId}`,
+        debugData: { ...debugInfo.debugData, meetingId: createdMeetingId },
+      });
+      
+    } catch (err: any) {
+      if (flowState === "timeout") return;
+      setError("create-test-booking-request", err, "creating_test_request");
+      setCurrentStep("options"); // Go back
+      return;
     }
-  };
-  
-  const loadAvailableSlots = async (mId: string) => {
-    setIsLoadingSlots(true);
+    
+    // Step 2: Load available slots
+    if (!createdMeetingId) return;
+    
     try {
+      setFlowState("loading_availability");
+      updateDebug({ currentState: "loading_availability", lastAction: "Loading availability", lastFunction: "test-booking-available-slots" });
+      
+      const controller = setTimeout_("availability", TIMEOUTS.availability);
+      
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
       
+      if (controller.signal.aborted) return;
+      
       const { data, error } = await supabase.functions.invoke("test-booking-available-slots", {
         headers: { Authorization: `Bearer ${session.access_token}` },
-        body: { meetingId: mId },
+        body: { meetingId: createdMeetingId },
       });
       
-      if (error) throw error;
-      setAvailableSlots(data?.slots || []);
-    } catch (err) {
-      toast.error("Failed to load available slots");
-      console.error(err);
-    } finally {
-      setIsLoadingSlots(false);
+      if (controller.signal.aborted) return;
+      controller.abort();
+      
+      if (error) {
+        throw { message: error.message, status: error.status || 500, functionName: "test-booking-available-slots" };
+      }
+      
+      if (data?.ok === false) {
+        throw { message: data?.error?.message || "Failed to load availability", status: data?.error?.status };
+      }
+      
+      const slots = data?.slots || data?.data?.slots || [];
+      const debug = data?.debug || {};
+      
+      setAvailableSlots(slots);
+      setAvailabilityDebug({
+        calendarsUsed: debug.calendarsUsed || [selectedCalendarId],
+        freebusyIntervalCount: debug.freebusyIntervalCount ?? "N/A",
+        eventsCount: debug.eventsCount ?? "N/A",
+        slotsGenerated: slots.length,
+        timezoneUsed: debug.timezoneUsed || "N/A",
+        ...debug,
+      });
+      
+      setFlowState("ready_to_select_slot");
+      updateDebug({
+        currentState: "ready_to_select_slot",
+        lastAction: `Found ${slots.length} slots`,
+        debugData: { ...debugInfo.debugData, slotsCount: slots.length, availabilityDebug: debug },
+      });
+      
+    } catch (err: any) {
+      if (flowState === "timeout") return;
+      setError("test-booking-available-slots", err, "loading_availability");
     }
-  };
+  }, [selectedMeetingTypeId, locationMode, selectedRoomId, rooms, selectedCalendarId, durationMinutes, sendInvites, setTimeout_, setError, updateDebug, debugInfo.debugData, flowState]);
   
-  const handleSelectSlot = (slot: TimeSlot) => {
-    setSelectedSlot(slot);
-    setCurrentStep("confirm");
-  };
-  
-  const handleConfirmBooking = async () => {
+  // ========== CONFIRM BOOKING ==========
+  const handleConfirmBooking = useCallback(async () => {
     if (!selectedSlot || !meetingId) return;
     
     const newRunId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     setRunId(newRunId);
     setProgressLogs([]);
     setCurrentStep("processing");
+    setFlowState("confirming");
+    updateDebug({ currentState: "confirming", lastAction: "Confirming booking", lastFunction: "confirm-test-booking" });
+    
+    pollingStartRef.current = Date.now();
     
     try {
+      const controller = setTimeout_("confirm_booking", TIMEOUTS.confirm_booking);
+      
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
+      
+      if (controller.signal.aborted) return;
       
       const { data, error } = await supabase.functions.invoke("confirm-test-booking", {
         headers: { Authorization: `Bearer ${session.access_token}` },
@@ -295,41 +508,141 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
         },
       });
       
-      if (error) throw error;
-      setBookingResult(data);
+      if (controller.signal.aborted) return;
+      controller.abort();
       
-      if (!data?.success) {
-        toast.error(data?.error || "Booking failed");
+      if (error) {
+        throw { message: error.message, status: error.status || 500, functionName: "confirm-test-booking" };
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Booking failed");
-      console.error(err);
-      setCurrentStep("confirm");
+      
+      if (data?.ok === false || !data?.success) {
+        throw { message: data?.error?.message || data?.error || "Booking failed", status: data?.error?.status };
+      }
+      
+      setBookingResult(data);
+      setFlowState("success");
+      setCurrentStep("done");
+      updateDebug({
+        currentState: "success",
+        lastAction: "Booking confirmed",
+        debugData: { ...debugInfo.debugData, bookingResult: data },
+      });
+      
+    } catch (err: any) {
+      if (flowState === "timeout") return;
+      setError("confirm-test-booking", err, "confirming");
     }
+  }, [selectedSlot, meetingId, setTimeout_, setError, updateDebug, debugInfo.debugData, flowState]);
+  
+  // ========== POLLING FOR LOGS ==========
+  useEffect(() => {
+    if (!meetingId || !runId || currentStep !== "processing") return;
+    
+    let isMounted = true;
+    pollingStartRef.current = Date.now();
+    
+    const fetchLogs = async () => {
+      if (!isMounted) return;
+      
+      // Check polling timeout
+      if (Date.now() - pollingStartRef.current > TIMEOUTS.polling_max) {
+        setFlowState("timeout");
+        updateDebug({
+          currentState: "timeout",
+          lastAction: "Polling timed out",
+          lastError: {
+            functionName: "polling",
+            message: `Polling timed out after ${TIMEOUTS.polling_max / 1000}s`,
+            step: "processing",
+            timestamp: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+      
+      try {
+        const { data } = await supabase
+          .from("booking_progress_logs")
+          .select("*")
+          .eq("meeting_id", meetingId)
+          .eq("run_id", runId)
+          .order("created_at", { ascending: true });
+        
+        if (!isMounted) return;
+        
+        if (data) {
+          setProgressLogs(data);
+          const doneLog = data.find((l) => l.step === "done");
+          if (doneLog) {
+            setFlowState("success");
+            setCurrentStep("done");
+            updateDebug({ currentState: "success", lastAction: "Processing complete" });
+            return;
+          }
+          
+          const errorLog = data.find((l) => l.level === "error");
+          if (errorLog) {
+            setFlowState("error");
+            updateDebug({
+              currentState: "error",
+              lastError: {
+                functionName: "confirm-test-booking",
+                message: errorLog.message,
+                step: errorLog.step,
+                timestamp: errorLog.created_at,
+              },
+            });
+            return;
+          }
+        }
+        
+        // Continue polling
+        pollingTimeoutRef.current = setTimeout(fetchLogs, 800);
+      } catch (err) {
+        console.error("Error fetching logs:", err);
+        pollingTimeoutRef.current = setTimeout(fetchLogs, 800);
+      }
+    };
+    
+    fetchLogs();
+    
+    return () => {
+      isMounted = false;
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current);
+      }
+    };
+  }, [meetingId, runId, currentStep, updateDebug]);
+  
+  // ========== CLEANUP ON CLOSE ==========
+  useEffect(() => {
+    if (!open) {
+      clearAllTimeouts();
+    }
+  }, [open, clearAllTimeouts]);
+  
+  const handleNextFromCalendar = () => {
+    if (!selectedCalendarId) {
+      toast.error("Please select a calendar");
+      return;
+    }
+    setCurrentStep("options");
+  };
+  
+  const handleSelectSlot = (slot: TimeSlot) => {
+    setSelectedSlot(slot);
+    setCurrentStep("confirm");
   };
   
   const handleClose = () => {
-    // Reset state
-    setCurrentStep("calendar");
-    setSelectedCalendarId("");
-    setSelectedMeetingTypeId("");
-    setDurationMinutes(60);
-    setLocationMode("Zoom");
-    setSelectedRoomId("");
-    setSendInvites(false);
-    setAvailableSlots([]);
-    setSelectedSlot(null);
-    setMeetingId(null);
-    setRunId("");
-    setProgressLogs([]);
-    setBookingResult(null);
+    handleReset();
     onOpenChange(false);
   };
   
   const getLogIcon = (level: string) => {
     switch (level) {
       case "success": return <CheckCircle className="h-4 w-4 text-green-500" />;
-      case "error": return <AlertCircle className="h-4 w-4 text-red-500" />;
+      case "error": return <XCircle className="h-4 w-4 text-destructive" />;
       case "warn": return <AlertCircle className="h-4 w-4 text-yellow-500" />;
       default: return <Terminal className="h-4 w-4 text-muted-foreground" />;
     }
@@ -339,16 +652,55 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
   const selectedRoom = rooms?.find((r) => r.id === selectedRoomId);
   const selectedCalendar = calendars.find((c) => c.id === selectedCalendarId);
   
+  const isLoading = flowState === "loading_calendars" || flowState === "creating_test_request" || flowState === "loading_availability" || flowState === "confirming";
+  const hasError = flowState === "error" || flowState === "timeout";
+  
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <TestTube className="h-5 w-5" />
-            Test My Booking
-            <Badge variant="secondary" className="ml-2">Admin Only</Badge>
-          </DialogTitle>
+          <div className="flex items-center justify-between">
+            <DialogTitle className="flex items-center gap-2">
+              <TestTube className="h-5 w-5" />
+              Test My Booking
+              <Badge variant="secondary" className="ml-2">Admin Only</Badge>
+            </DialogTitle>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={handleCopyDebugReport} title="Copy Debug Report">
+                <Copy className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setShowDebugPanel(!showDebugPanel)} title="Toggle Debug Panel">
+                <Bug className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleReset}>
+                <RotateCcw className="h-4 w-4 mr-1" /> Reset
+              </Button>
+            </div>
+          </div>
         </DialogHeader>
+        
+        {/* Debug Panel - Always visible when enabled */}
+        {showDebugPanel && (
+          <Card className="border-dashed border-muted-foreground/30 bg-muted/30">
+            <CardContent className="py-3 px-4 text-xs font-mono">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                <div><span className="text-muted-foreground">State:</span> <Badge variant={hasError ? "destructive" : isLoading ? "secondary" : "outline"} className="text-xs">{flowState}</Badge></div>
+                <div><span className="text-muted-foreground">Step:</span> {currentStep}</div>
+                <div><span className="text-muted-foreground">Last action:</span> {debugInfo.lastAction}</div>
+                <div><span className="text-muted-foreground">Last function:</span> {debugInfo.lastFunction}</div>
+              </div>
+              {debugInfo.lastError && (
+                <div className="mt-2 p-2 bg-destructive/10 rounded text-destructive">
+                  <div><strong>Error:</strong> {debugInfo.lastError.message}</div>
+                  {debugInfo.lastError.statusCode && <div>Status: {debugInfo.lastError.statusCode}</div>}
+                  {debugInfo.lastError.responseExcerpt && debugInfo.lastError.responseExcerpt !== debugInfo.lastError.message && (
+                    <div className="truncate">Response: {debugInfo.lastError.responseExcerpt}</div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
         
         {/* Step indicator */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground border-b pb-4">
@@ -362,16 +714,48 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
         </div>
         
         <div className="flex-1 overflow-auto">
+          {/* Error/Timeout State Overlay */}
+          {hasError && (
+            <Card className="border-destructive bg-destructive/5 mb-4">
+              <CardContent className="py-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-destructive">
+                      {flowState === "timeout" ? "Operation Timed Out" : "Error Occurred"}
+                    </h4>
+                    {debugInfo.lastError && (
+                      <div className="text-sm mt-1 space-y-1">
+                        <p><strong>Function:</strong> {debugInfo.lastError.functionName}</p>
+                        <p><strong>Message:</strong> {debugInfo.lastError.message}</p>
+                        {debugInfo.lastError.statusCode && <p><strong>Status:</strong> {debugInfo.lastError.statusCode}</p>}
+                      </div>
+                    )}
+                    <div className="flex gap-2 mt-3">
+                      <Button size="sm" variant="outline" onClick={handleReset}>
+                        <RotateCcw className="h-4 w-4 mr-1" /> Reset & Retry
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={handleCopyDebugReport}>
+                        <Copy className="h-4 w-4 mr-1" /> Copy Debug Report
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          
           {/* Step 1: Calendar Selection */}
-          {currentStep === "calendar" && (
+          {currentStep === "calendar" && !hasError && (
             <div className="space-y-4 py-4">
               <p className="text-sm text-muted-foreground">
                 Select which of your connected Google calendars to use for availability checking and event creation.
               </p>
               
-              {isLoadingCalendars ? (
+              {flowState === "loading_calendars" ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin" />
+                  <span className="ml-2 text-sm text-muted-foreground">Loading calendars...</span>
                 </div>
               ) : calendars.length === 0 ? (
                 <Card>
@@ -379,6 +763,9 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                     <AlertCircle className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
                     <p>No Google calendars connected.</p>
                     <p className="text-sm text-muted-foreground">Please connect your Google Calendar in Settings first.</p>
+                    <Button variant="outline" className="mt-4" onClick={loadCalendars}>
+                      <RotateCcw className="h-4 w-4 mr-1" /> Retry
+                    </Button>
                   </CardContent>
                 </Card>
               ) : (
@@ -400,7 +787,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
               )}
               
               <div className="flex justify-end pt-4">
-                <Button onClick={handleNextFromCalendar} disabled={!selectedCalendarId || isLoadingCalendars}>
+                <Button onClick={handleNextFromCalendar} disabled={!selectedCalendarId || isLoading}>
                   Next <ChevronRight className="h-4 w-4 ml-1" />
                 </Button>
               </div>
@@ -408,7 +795,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
           )}
           
           {/* Step 2: Options */}
-          {currentStep === "options" && (
+          {currentStep === "options" && !hasError && (
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <Label>Meeting Type</Label>
@@ -491,8 +878,8 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                 <Button variant="outline" onClick={() => setCurrentStep("calendar")}>
                   <ChevronLeft className="h-4 w-4 mr-1" /> Back
                 </Button>
-                <Button onClick={handleNextFromOptions} disabled={!selectedMeetingTypeId || isLoadingSlots}>
-                  {isLoadingSlots ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                <Button onClick={handleNextFromOptions} disabled={!selectedMeetingTypeId || isLoading}>
+                  {isLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                   Next <ChevronRight className="h-4 w-4 ml-1" />
                 </Button>
               </div>
@@ -500,22 +887,45 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
           )}
           
           {/* Step 3: Availability */}
-          {currentStep === "availability" && (
+          {currentStep === "availability" && !hasError && (
             <div className="space-y-4 py-4">
               <p className="text-sm text-muted-foreground">
                 Select an available time slot. Availability is based on your selected calendar: <strong>{selectedCalendar?.summary}</strong>
               </p>
               
-              {isLoadingSlots ? (
-                <div className="flex items-center justify-center py-8">
+              {/* Availability Debug Summary */}
+              {Object.keys(availabilityDebug).length > 0 && (
+                <Card className="bg-muted/30">
+                  <CardContent className="py-2 px-4 text-xs font-mono">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                      <div>Calendars: {JSON.stringify(availabilityDebug.calendarsUsed)}</div>
+                      <div>Freebusy intervals: {availabilityDebug.freebusyIntervalCount}</div>
+                      <div>Events: {availabilityDebug.eventsCount}</div>
+                      <div>Slots generated: {availabilityDebug.slotsGenerated}</div>
+                      <div className="col-span-2">Timezone: {availabilityDebug.timezoneUsed}</div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+              
+              {(flowState === "creating_test_request" || flowState === "loading_availability") ? (
+                <div className="flex flex-col items-center justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin" />
+                  <span className="mt-2 text-sm text-muted-foreground">
+                    {flowState === "creating_test_request" ? "Creating test booking..." : "Loading availability..."}
+                  </span>
                 </div>
               ) : availableSlots.length === 0 ? (
                 <Card>
                   <CardContent className="py-6 text-center">
                     <Calendar className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
                     <p>No available slots found.</p>
-                    <p className="text-sm text-muted-foreground">Your calendar may be fully booked.</p>
+                    <p className="text-sm text-muted-foreground">Your calendar may be fully booked, or no business hours are available.</p>
+                    {/* Show debug info even when empty */}
+                    <div className="mt-4 text-xs text-left bg-muted/50 p-3 rounded font-mono">
+                      <div>Slots generated: 0</div>
+                      <div>Calendars checked: {availabilityDebug.calendarsUsed?.join(", ") || selectedCalendarId}</div>
+                    </div>
                   </CardContent>
                 </Card>
               ) : (
@@ -551,7 +961,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
           )}
           
           {/* Step 4: Confirm */}
-          {currentStep === "confirm" && selectedSlot && (
+          {currentStep === "confirm" && selectedSlot && !hasError && (
             <div className="space-y-4 py-4">
               <Card className="border-primary">
                 <CardHeader className="pb-2">
@@ -594,7 +1004,8 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                 <Button variant="outline" onClick={() => setCurrentStep("availability")}>
                   <ChevronLeft className="h-4 w-4 mr-1" /> Back
                 </Button>
-                <Button onClick={handleConfirmBooking}>
+                <Button onClick={handleConfirmBooking} disabled={isLoading}>
+                  {isLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                   Confirm Test Booking
                 </Button>
               </div>
@@ -602,7 +1013,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
           )}
           
           {/* Step 5: Processing */}
-          {currentStep === "processing" && (
+          {currentStep === "processing" && !hasError && (
             <div className="space-y-4 py-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -628,7 +1039,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                             <span className="text-muted-foreground">
                               {format(new Date(log.created_at), "HH:mm:ss")}
                             </span>
-                            <span className={log.level === "error" ? "text-red-500" : log.level === "success" ? "text-green-500" : ""}>
+                            <span className={log.level === "error" ? "text-destructive" : log.level === "success" ? "text-green-500" : ""}>
                               {log.message}
                             </span>
                           </div>
@@ -638,6 +1049,12 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                   </ScrollArea>
                 </CardContent>
               </Card>
+              
+              <div className="flex justify-end pt-4">
+                <Button variant="outline" onClick={handleReset}>
+                  <RotateCcw className="h-4 w-4 mr-1" /> Cancel & Reset
+                </Button>
+              </div>
             </div>
           )}
           
@@ -688,7 +1105,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                           <span className="text-muted-foreground">
                             {format(new Date(log.created_at), "HH:mm:ss")}
                           </span>
-                          <span className={log.level === "error" ? "text-red-500" : log.level === "success" ? "text-green-500" : ""}>
+                          <span className={log.level === "error" ? "text-destructive" : log.level === "success" ? "text-green-500" : ""}>
                             {log.message}
                           </span>
                         </div>
@@ -698,7 +1115,10 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                 </CardContent>
               </Card>
               
-              <div className="flex justify-end pt-4">
+              <div className="flex justify-end pt-4 gap-2">
+                <Button variant="outline" onClick={handleReset}>
+                  <RotateCcw className="h-4 w-4 mr-1" /> Test Again
+                </Button>
                 <Button onClick={handleClose}>Close</Button>
               </div>
             </div>
