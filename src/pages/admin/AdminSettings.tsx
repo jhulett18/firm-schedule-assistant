@@ -63,6 +63,8 @@ const AdminSettings = () => {
     if (lawmaticsSuccess === "true") {
       toast.success("Successfully connected to Lawmatics!");
       queryClient.invalidateQueries({ queryKey: ["lawmatics-connection"] });
+      // Auto-load Lawmatics data on successful connection
+      setTimeout(() => loadLawmaticsData(true), 500);
     } else if (lawmaticsError) {
       toast.error(`Failed to connect to Lawmatics: ${lawmaticsError}`);
     }
@@ -96,6 +98,14 @@ const AdminSettings = () => {
       return data;
     },
   });
+
+  // Auto-load Lawmatics data when connection exists and data is empty
+  const hasLoadedLawmaticsData = lawmaticsEventTypes.length > 0 || lawmaticsLocations.length > 0;
+  useEffect(() => {
+    if (lawmaticsConnection && !hasLoadedLawmaticsData && !isLoadingLawmaticsData) {
+      loadLawmaticsData(false);
+    }
+  }, [lawmaticsConnection, hasLoadedLawmaticsData, isLoadingLawmaticsData]);
 
   // Fetch app settings
   const { data: appSettings, isLoading: isLoadingSettings } = useQuery({
@@ -746,38 +756,57 @@ const AdminSettings = () => {
             {lawmaticsConnection && (
               <>
                 {/* Load Lawmatics Data Button */}
-                <div className="flex items-center gap-4 pt-4 border-t">
-                  <Button
-                    variant="outline"
-                    onClick={() => loadLawmaticsData(false)}
-                    disabled={isLoadingLawmaticsData}
-                  >
-                    {isLoadingLawmaticsData ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Loading...
-                      </>
-                    ) : (
-                      <>
-                        <Download className="h-4 w-4 mr-2" />
-                        Load Lawmatics Data
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => loadLawmaticsData(true)}
-                    disabled={isLoadingLawmaticsData}
-                  >
-                    <RefreshCw className="h-4 w-4 mr-1" />
-                    Refresh
-                  </Button>
-                  {lawmaticsDataFetchedAt && (
-                    <span className="text-sm text-muted-foreground">
-                      Last fetched: {formatDistanceToNow(new Date(lawmaticsDataFetchedAt), { addSuffix: true })}
-                      {lawmaticsDataCached && " (cached)"}
-                    </span>
+                <div className="space-y-3 pt-4 border-t">
+                  <div className="flex items-center gap-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => loadLawmaticsData(false)}
+                      disabled={isLoadingLawmaticsData}
+                    >
+                      {isLoadingLawmaticsData ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Loading...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-4 w-4 mr-2" />
+                          Load Lawmatics Data
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => loadLawmaticsData(true)}
+                      disabled={isLoadingLawmaticsData}
+                    >
+                      <RefreshCw className="h-4 w-4 mr-1" />
+                      Refresh
+                    </Button>
+                  </div>
+                  
+                  {/* Status line */}
+                  {(lawmaticsEventTypes.length > 0 || lawmaticsLocations.length > 0 || lawmaticsDataFetchedAt) && (
+                    <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 space-y-1">
+                      <div className="flex items-center gap-4">
+                        <span>Appointment Types: <strong className="text-foreground">{lawmaticsEventTypes.length}</strong></span>
+                        <span>Locations: <strong className="text-foreground">{lawmaticsLocations.length}</strong></span>
+                        {lawmaticsDataFetchedAt && (
+                          <span>
+                            Last fetched: {formatDistanceToNow(new Date(lawmaticsDataFetchedAt), { addSuffix: true })}
+                            {lawmaticsDataCached && " (cached)"}
+                          </span>
+                        )}
+                      </div>
+                      {lawmaticsEventTypes.length > 0 && (
+                        <div className="text-xs">
+                          <span className="text-muted-foreground">Sample: </span>
+                          {lawmaticsEventTypes.slice(0, 3).map(et => et.name).join(", ")}
+                          {lawmaticsEventTypes.length > 3 && `, +${lawmaticsEventTypes.length - 3} more`}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -821,8 +850,8 @@ const AdminSettings = () => {
                                       [mt.id]: value === "none" ? "" : value
                                     }))}
                                   >
-                                    <SelectTrigger className="max-w-xs">
-                                      <SelectValue placeholder="Select event type" />
+                                    <SelectTrigger className="max-w-md">
+                                      <SelectValue placeholder="Select appointment type" />
                                     </SelectTrigger>
                                     <SelectContent>
                                       <SelectItem value="none">— None —</SelectItem>
@@ -833,17 +862,6 @@ const AdminSettings = () => {
                                       ))}
                                     </SelectContent>
                                   </Select>
-                                  {meetingTypeMappings[mt.id] && meetingTypeMappings[mt.id] !== "none" && (
-                                    <a
-                                      href={`https://app.lawmatics.com/settings/appointments-events/appointment-types/${meetingTypeMappings[mt.id]}/edit`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-muted-foreground hover:text-foreground"
-                                      title="Open in Lawmatics"
-                                    >
-                                      <ExternalLink className="h-4 w-4" />
-                                    </a>
-                                  )}
                                 </div>
                               ) : (
                                 <div className="flex items-center gap-2">
