@@ -727,13 +727,12 @@ serve(async (req) => {
       if (lawmaticsUserId) {
         await writeLog(supabase, meetingId, runId, "lawmatics_me_fetched", "success", "Lawmatics user fetched", {
           lawmatics_user_id: lawmaticsUserId,
-          lawmatics_user_email: meResult.email,
           lawmatics_user_timezone: lawmaticsUserTimezone,
         });
       } else {
         await writeLog(supabase, meetingId, runId, "lawmatics_me_failed", "warn", "Could not fetch Lawmatics user - appointment may not be assigned");
       }
-      
+
       // Determine which timezone to use for Lawmatics date/time conversion
       // Priority: Lawmatics user timezone > meeting timezone > default
       const effectiveTimezone = lawmaticsUserTimezone || meetingTimezone || "America/New_York";
@@ -754,8 +753,8 @@ serve(async (req) => {
           attendee_name: attendeeName,
         });
         
-        lawmaticsContactId = await lawmaticsFindOrCreateContact(lawmaticsAccessToken, attendeeEmail, attendeeName);
-        
+        lawmaticsContactId = await lawmaticsFindOrCreateContact(lawmaticsAccessToken, { email: attendeeEmail, name: attendeeName });
+
         if (lawmaticsContactId) {
           await writeLog(supabase, meetingId, runId, "lawmatics_contact_resolved", "success", "Lawmatics contact resolved", {
             contact_id: lawmaticsContactId,
@@ -801,13 +800,15 @@ serve(async (req) => {
         lawmaticsContactId,
         supabase,
         meetingId,
-        runId
+        runId,
+        { requiresLocation: meeting.location_mode === "InPerson" }
       );
 
-      if (lawmaticsResult.success) {
-        lawmaticsAppointmentId = lawmaticsResult.appointmentId || null;
+      if (lawmaticsResult.createdId) {
+        lawmaticsAppointmentId = lawmaticsResult.createdId;
         lawmaticsReadback = lawmaticsResult.readback || null;
-      } else if (lawmaticsResult.error) {
+      }
+      if (!lawmaticsResult.ok && lawmaticsResult.error) {
         errors.push(lawmaticsResult.error);
       }
     } else {
