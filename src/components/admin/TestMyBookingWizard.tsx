@@ -73,6 +73,14 @@ interface ProgressLog {
   created_at: string;
 }
 
+// ========== CLIENT-SIDE LOG ENTRY ==========
+interface LogEntry {
+  ts: string;
+  level: 'info' | 'warn' | 'error' | 'success';
+  message: string;
+  details?: any;
+}
+
 interface DebugInfo {
   currentState: FlowState;
   lastAction: string;
@@ -132,6 +140,10 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
   const [progressLogs, setProgressLogs] = useState<ProgressLog[]>([]);
   const [bookingResult, setBookingResult] = useState<any>(null);
   
+  // ========== CLIENT-SIDE LOGS (ALWAYS-ON) ==========
+  const [clientLogs, setClientLogs] = useState<LogEntry[]>([]);
+  const logsEndRef = useRef<HTMLDivElement | null>(null);
+  
   // Refs for cleanup
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -169,6 +181,46 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
   const updateDebug = useCallback((updates: Partial<DebugInfo>) => {
     setDebugInfo(prev => ({ ...prev, ...updates }));
   }, []);
+  
+  // ========== CLIENT-SIDE LOGGING ==========
+  const appendLog = useCallback((level: LogEntry['level'], message: string, details?: any) => {
+    const entry: LogEntry = {
+      ts: new Date().toISOString(),
+      level,
+      message,
+      details,
+    };
+    setClientLogs(prev => [...prev, entry]);
+    console.log(`[TestMyBooking] [${level.toUpperCase()}] ${message}`, details || '');
+  }, []);
+  
+  // Safe preview for logging (remove tokens, truncate)
+  const safePreview = useCallback((body: any): any => {
+    if (!body) return body;
+    const str = JSON.stringify(body);
+    if (str.length > 500) {
+      return { _truncated: true, preview: str.slice(0, 500) + '...' };
+    }
+    // Remove tokens
+    const sanitized = { ...body };
+    if (sanitized.token) sanitized.token = '[REDACTED]';
+    if (sanitized.access_token) sanitized.access_token = '[REDACTED]';
+    return sanitized;
+  }, []);
+  
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [clientLogs]);
+  
+  // Log on wizard open
+  useEffect(() => {
+    if (open && clientLogs.length === 0) {
+      appendLog('info', 'Wizard opened');
+    }
+  }, [open, clientLogs.length, appendLog]);
   
   const setError = useCallback((functionName: string, error: any, step?: string) => {
     const errorDetails: ErrorDetails = {
@@ -240,6 +292,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
   // ========== RESET ==========
   const handleReset = useCallback(() => {
     clearAllTimeouts();
+    appendLog('info', 'Reset clicked - clearing state');
     
     setCurrentStep("calendar");
     setFlowState("idle");
@@ -257,6 +310,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
     setRunId("");
     setProgressLogs([]);
     setBookingResult(null);
+    setClientLogs([]); // Clear client logs
     
     setDebugInfo({
       currentState: "idle",
@@ -267,7 +321,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
     });
     
     toast.info("Test wizard reset");
-  }, [clearAllTimeouts]);
+  }, [clearAllTimeouts, appendLog]);
   
   // ========== COPY DEBUG REPORT ==========
   const handleCopyDebugReport = useCallback(async () => {
@@ -285,6 +339,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       slotsCount: availableSlots.length,
       availabilityDebug,
       debugInfo,
+      clientLogs, // Include client logs
       progressLogsCount: progressLogs.length,
       lastProgressLog: progressLogs[progressLogs.length - 1] || null,
     };
@@ -295,48 +350,81 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
     } else {
       toast.error("Failed to copy debug report");
     }
-  }, [currentStep, flowState, selectedCalendarId, selectedMeetingTypeId, durationMinutes, locationMode, selectedRoomId, meetingId, runId, availableSlots, availabilityDebug, debugInfo, progressLogs]);
+  }, [currentStep, flowState, selectedCalendarId, selectedMeetingTypeId, durationMinutes, locationMode, selectedRoomId, meetingId, runId, availableSlots, availabilityDebug, debugInfo, clientLogs, progressLogs]);
+  
+  // ========== COPY LOGS ==========
+  const handleCopyLogs = useCallback(async () => {
+    const success = await copyToClipboard(JSON.stringify(clientLogs, null, 2));
+    if (success) {
+      toast.success("Logs copied to clipboard");
+    } else {
+      toast.error("Failed to copy logs");
+    }
+  }, [clientLogs]);
   
   // ========== LOAD CALENDARS ==========
   const loadCalendars = useCallback(async () => {
     const functionName = "google-list-calendars";
     
     try {
+      appendLog('info', `Flow state -> loading_calendars`);
       setFlowState("loading_calendars");
       updateDebug({ currentState: "loading_calendars", lastAction: "Loading calendars", lastFunction: functionName });
       
+      appendLog('info', `Invoking ${functionName}`);
+      const startedAt = Date.now();
       const controller = setTimeout_("calendars", TIMEOUTS.calendars);
       
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
+      if (!session) {
+        appendLog('error', `${functionName}: Not authenticated`);
+        throw new Error("Not authenticated");
+      }
       
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        appendLog('warn', `${functionName}: Aborted before call`);
+        return;
+      }
       
       const { data, error } = await supabase.functions.invoke(functionName, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       
-      if (controller.signal.aborted) return;
+      const ms = Date.now() - startedAt;
+      
+      if (controller.signal.aborted) {
+        appendLog('warn', `${functionName}: Aborted after ${ms}ms`);
+        return;
+      }
       controller.abort(); // Clear timeout on success
       
       if (error) {
+        appendLog('error', `${functionName} error after ${ms}ms`, { message: error.message });
         throw { message: error.message, status: error.status || 500, functionName };
       }
       
       // Handle structured response
       if (data?.ok === false) {
+        appendLog('error', `${functionName} returned ok:false after ${ms}ms`, { error: data.error });
         throw { message: data.error?.message || "Unknown error", status: data.error?.status, functionName };
       }
       
       const calendarsData = data?.calendars || data?.data?.calendars || [];
+      appendLog('info', `${functionName} success after ${ms}ms`, { 
+        calendarsCount: calendarsData.length,
+        keys: data ? Object.keys(data) : []
+      });
+      
       setCalendars(calendarsData);
       
       // Auto-select primary if available
       const primary = calendarsData.find((c: any) => c.primary);
       if (primary) {
         setSelectedCalendarId(primary.id);
+        appendLog('info', `Auto-selected primary calendar: ${primary.summary}`);
       }
       
+      appendLog('info', `Flow state -> idle`);
       setFlowState("idle");
       updateDebug({
         currentState: "idle",
@@ -345,10 +433,14 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       });
       
     } catch (err: any) {
-      if (flowState === "timeout") return; // Already handled
+      if (flowState === "timeout") {
+        appendLog('warn', 'Timeout already handled, skipping error');
+        return;
+      }
+      appendLog('error', `${functionName} threw exception`, { message: err?.message || String(err) });
       setError(functionName, err, "loading_calendars");
     }
-  }, [setTimeout_, setError, updateDebug, flowState, debugInfo.debugData]);
+  }, [setTimeout_, setError, updateDebug, flowState, debugInfo.debugData, appendLog]);
   
   // Load calendars on open
   useEffect(() => {
@@ -359,11 +451,21 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
   
   // ========== CREATE TEST REQUEST + LOAD AVAILABILITY ==========
   const handleNextFromOptions = useCallback(async () => {
+    appendLog('info', 'Options selected, proceeding to create test booking', {
+      meetingTypeId: selectedMeetingTypeId,
+      durationMinutes,
+      locationMode,
+      roomId: selectedRoomId,
+      calendarId: selectedCalendarId,
+    });
+    
     if (!selectedMeetingTypeId) {
+      appendLog('warn', 'Missing meeting type');
       toast.error("Please select a meeting type");
       return;
     }
     if (locationMode === "InPerson" && !selectedRoomId && rooms && rooms.length > 0) {
+      appendLog('warn', 'Missing room for in-person meeting');
       toast.error("Please select a room");
       return;
     }
@@ -371,43 +473,67 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
     let createdMeetingId: string | null = null;
     
     // Step 1: Create test booking request
+    const createFnName = "create-test-booking-request";
     try {
+      appendLog('info', `Flow state -> creating_test_request`);
       setFlowState("creating_test_request");
       setCurrentStep("availability"); // Move to availability step immediately to show loading
-      updateDebug({ currentState: "creating_test_request", lastAction: "Creating test request", lastFunction: "create-test-booking-request" });
+      updateDebug({ currentState: "creating_test_request", lastAction: "Creating test request", lastFunction: createFnName });
       
+      appendLog('info', `Invoking ${createFnName}`);
+      const startedAt = Date.now();
       const controller = setTimeout_("create_test_request", TIMEOUTS.create_test_request);
       
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
+      if (!session) {
+        appendLog('error', `${createFnName}: Not authenticated`);
+        throw new Error("Not authenticated");
+      }
       
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        appendLog('warn', `${createFnName}: Aborted before call`);
+        return;
+      }
       
-      const { data, error } = await supabase.functions.invoke("create-test-booking-request", {
+      const requestBody = {
+        meetingTypeId: selectedMeetingTypeId,
+        durationMinutes,
+        locationMode,
+        roomId: locationMode === "InPerson" ? selectedRoomId : undefined,
+        adminCalendarId: selectedCalendarId,
+        sendInvites,
+      };
+      
+      const { data, error } = await supabase.functions.invoke(createFnName, {
         headers: { Authorization: `Bearer ${session.access_token}` },
-        body: {
-          meetingTypeId: selectedMeetingTypeId,
-          durationMinutes,
-          locationMode,
-          roomId: locationMode === "InPerson" ? selectedRoomId : undefined,
-          adminCalendarId: selectedCalendarId,
-          sendInvites,
-        },
+        body: requestBody,
       });
       
-      if (controller.signal.aborted) return;
+      const ms = Date.now() - startedAt;
+      
+      if (controller.signal.aborted) {
+        appendLog('warn', `${createFnName}: Aborted after ${ms}ms`);
+        return;
+      }
       controller.abort();
       
       if (error) {
-        throw { message: error.message, status: error.status || 500, functionName: "create-test-booking-request" };
+        appendLog('error', `${createFnName} error after ${ms}ms`, { message: error.message });
+        throw { message: error.message, status: error.status || 500, functionName: createFnName };
       }
       
       if (data?.ok === false || !data?.success) {
+        appendLog('error', `${createFnName} returned failure after ${ms}ms`, { error: data?.error });
         throw { message: data?.error?.message || data?.error || "Failed to create test booking", status: data?.error?.status };
       }
       
       createdMeetingId = data.meetingId;
       setMeetingId(createdMeetingId);
+      
+      appendLog('info', `${createFnName} success after ${ms}ms`, { 
+        meetingId: createdMeetingId,
+        keys: data ? Object.keys(data) : []
+      });
       
       updateDebug({
         lastAction: `Created meeting ${createdMeetingId}`,
@@ -415,8 +541,12 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       });
       
     } catch (err: any) {
-      if (flowState === "timeout") return;
-      setError("create-test-booking-request", err, "creating_test_request");
+      if (flowState === "timeout") {
+        appendLog('warn', 'Timeout already handled, skipping error');
+        return;
+      }
+      appendLog('error', `${createFnName} threw exception`, { message: err?.message || String(err) });
+      setError(createFnName, err, "creating_test_request");
       setCurrentStep("options"); // Go back
       return;
     }
@@ -424,35 +554,65 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
     // Step 2: Load available slots
     if (!createdMeetingId) return;
     
+    const availFnName = "test-booking-available-slots";
     try {
+      appendLog('info', `Flow state -> loading_availability`);
       setFlowState("loading_availability");
-      updateDebug({ currentState: "loading_availability", lastAction: "Loading availability", lastFunction: "test-booking-available-slots" });
+      updateDebug({ currentState: "loading_availability", lastAction: "Loading availability", lastFunction: availFnName });
       
+      appendLog('info', `Invoking ${availFnName}`, { meetingId: createdMeetingId });
+      const startedAt = Date.now();
       const controller = setTimeout_("availability", TIMEOUTS.availability);
       
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
+      if (!session) {
+        appendLog('error', `${availFnName}: Not authenticated`);
+        throw new Error("Not authenticated");
+      }
       
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        appendLog('warn', `${availFnName}: Aborted before call`);
+        return;
+      }
       
-      const { data, error } = await supabase.functions.invoke("test-booking-available-slots", {
+      const { data, error } = await supabase.functions.invoke(availFnName, {
         headers: { Authorization: `Bearer ${session.access_token}` },
         body: { meetingId: createdMeetingId },
       });
       
-      if (controller.signal.aborted) return;
+      const ms = Date.now() - startedAt;
+      
+      if (controller.signal.aborted) {
+        appendLog('warn', `${availFnName}: Aborted after ${ms}ms`);
+        return;
+      }
       controller.abort();
       
       if (error) {
-        throw { message: error.message, status: error.status || 500, functionName: "test-booking-available-slots" };
+        appendLog('error', `${availFnName} error after ${ms}ms`, { message: error.message });
+        throw { message: error.message, status: error.status || 500, functionName: availFnName };
       }
       
       if (data?.ok === false) {
+        appendLog('error', `${availFnName} returned ok:false after ${ms}ms`, { error: data?.error });
         throw { message: data?.error?.message || "Failed to load availability", status: data?.error?.status };
       }
       
       const slots = data?.slots || data?.data?.slots || [];
       const debug = data?.debug || {};
+      
+      appendLog('info', `${availFnName} success after ${ms}ms`, { 
+        slotsCount: slots.length,
+        debug: debug,
+        keys: data ? Object.keys(data) : []
+      });
+      
+      // If edge returns debugSteps, append them
+      if (data?.debugSteps?.length) {
+        for (const step of data.debugSteps) {
+          appendLog(step.level || 'info', `[${availFnName}] ${step.message}`, step.details || step);
+        }
+      }
       
       setAvailableSlots(slots);
       setAvailabilityDebug({
@@ -464,6 +624,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
         ...debug,
       });
       
+      appendLog('info', `Flow state -> ready_to_select_slot`);
       setFlowState("ready_to_select_slot");
       updateDebug({
         currentState: "ready_to_select_slot",
@@ -472,33 +633,56 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       });
       
     } catch (err: any) {
-      if (flowState === "timeout") return;
-      setError("test-booking-available-slots", err, "loading_availability");
+      if (flowState === "timeout") {
+        appendLog('warn', 'Timeout already handled, skipping error');
+        return;
+      }
+      appendLog('error', `${availFnName} threw exception`, { message: err?.message || String(err) });
+      setError(availFnName, err, "loading_availability");
     }
-  }, [selectedMeetingTypeId, locationMode, selectedRoomId, rooms, selectedCalendarId, durationMinutes, sendInvites, setTimeout_, setError, updateDebug, debugInfo.debugData, flowState]);
+  }, [selectedMeetingTypeId, locationMode, selectedRoomId, rooms, selectedCalendarId, durationMinutes, sendInvites, setTimeout_, setError, updateDebug, debugInfo.debugData, flowState, appendLog]);
   
   // ========== CONFIRM BOOKING ==========
   const handleConfirmBooking = useCallback(async () => {
-    if (!selectedSlot || !meetingId) return;
+    if (!selectedSlot || !meetingId) {
+      appendLog('warn', 'Missing slot or meeting ID for confirm');
+      return;
+    }
     
+    const confirmFnName = "confirm-test-booking";
     const newRunId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    
+    appendLog('info', `Flow state -> confirming`, { 
+      meetingId, 
+      slot: { start: selectedSlot.start, end: selectedSlot.end },
+      runId: newRunId
+    });
+    
     setRunId(newRunId);
     setProgressLogs([]);
     setCurrentStep("processing");
     setFlowState("confirming");
-    updateDebug({ currentState: "confirming", lastAction: "Confirming booking", lastFunction: "confirm-test-booking" });
+    updateDebug({ currentState: "confirming", lastAction: "Confirming booking", lastFunction: confirmFnName });
     
     pollingStartRef.current = Date.now();
     
     try {
+      appendLog('info', `Invoking ${confirmFnName}`);
+      const startedAt = Date.now();
       const controller = setTimeout_("confirm_booking", TIMEOUTS.confirm_booking);
       
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
+      if (!session) {
+        appendLog('error', `${confirmFnName}: Not authenticated`);
+        throw new Error("Not authenticated");
+      }
       
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        appendLog('warn', `${confirmFnName}: Aborted before call`);
+        return;
+      }
       
-      const { data, error } = await supabase.functions.invoke("confirm-test-booking", {
+      const { data, error } = await supabase.functions.invoke(confirmFnName, {
         headers: { Authorization: `Bearer ${session.access_token}` },
         body: {
           meetingId,
@@ -508,18 +692,40 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
         },
       });
       
-      if (controller.signal.aborted) return;
+      const ms = Date.now() - startedAt;
+      
+      if (controller.signal.aborted) {
+        appendLog('warn', `${confirmFnName}: Aborted after ${ms}ms`);
+        return;
+      }
       controller.abort();
       
       if (error) {
-        throw { message: error.message, status: error.status || 500, functionName: "confirm-test-booking" };
+        appendLog('error', `${confirmFnName} error after ${ms}ms`, { message: error.message });
+        throw { message: error.message, status: error.status || 500, functionName: confirmFnName };
       }
       
       if (data?.ok === false || !data?.success) {
+        appendLog('error', `${confirmFnName} returned failure after ${ms}ms`, { error: data?.error });
         throw { message: data?.error?.message || data?.error || "Booking failed", status: data?.error?.status };
       }
       
+      appendLog('success', `${confirmFnName} success after ${ms}ms`, { 
+        lawmaticsAppointmentId: data?.lawmaticsAppointmentId,
+        googleEventId: data?.googleEventId,
+        hasErrors: data?.hasErrors,
+        keys: data ? Object.keys(data) : []
+      });
+      
+      // If edge returns debugSteps, append them
+      if (data?.debugSteps?.length) {
+        for (const step of data.debugSteps) {
+          appendLog(step.level || 'info', `[${confirmFnName}] ${step.message}`, step.details || step);
+        }
+      }
+      
       setBookingResult(data);
+      appendLog('info', `Flow state -> success`);
       setFlowState("success");
       setCurrentStep("done");
       updateDebug({
@@ -529,10 +735,14 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       });
       
     } catch (err: any) {
-      if (flowState === "timeout") return;
-      setError("confirm-test-booking", err, "confirming");
+      if (flowState === "timeout") {
+        appendLog('warn', 'Timeout already handled, skipping error');
+        return;
+      }
+      appendLog('error', `${confirmFnName} threw exception`, { message: err?.message || String(err) });
+      setError(confirmFnName, err, "confirming");
     }
-  }, [selectedSlot, meetingId, setTimeout_, setError, updateDebug, debugInfo.debugData, flowState]);
+  }, [selectedSlot, meetingId, setTimeout_, setError, updateDebug, debugInfo.debugData, flowState, appendLog]);
   
   // ========== POLLING FOR LOGS ==========
   useEffect(() => {
@@ -626,10 +836,12 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       toast.error("Please select a calendar");
       return;
     }
+    appendLog('info', `Calendar selected: ${selectedCalendarId}`);
     setCurrentStep("options");
   };
   
   const handleSelectSlot = (slot: TimeSlot) => {
+    appendLog('info', `Slot selected`, { start: slot.start, end: slot.end });
     setSelectedSlot(slot);
     setCurrentStep("confirm");
   };
@@ -1022,29 +1234,35 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
               
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <Terminal className="h-4 w-4" />
-                    Progress Logs
+                  <CardTitle className="text-sm flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <Terminal className="h-4 w-4" />
+                      Execution Log ({clientLogs.length} entries)
+                    </span>
+                    <Button variant="ghost" size="sm" onClick={handleCopyLogs}>
+                      <Copy className="h-3 w-3 mr-1" /> Copy Logs
+                    </Button>
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ScrollArea className="h-[250px]">
                     <div className="space-y-2 pr-4 font-mono text-xs">
-                      {progressLogs.length === 0 ? (
-                        <p className="text-muted-foreground">Waiting for logs...</p>
+                      {clientLogs.length === 0 ? (
+                        <p className="text-muted-foreground">No logs yet</p>
                       ) : (
-                        progressLogs.map((log) => (
-                          <div key={log.id} className="flex items-start gap-2">
+                        clientLogs.map((log, idx) => (
+                          <div key={idx} className="flex items-start gap-2">
                             {getLogIcon(log.level)}
-                            <span className="text-muted-foreground">
-                              {format(new Date(log.created_at), "HH:mm:ss")}
+                            <span className="text-muted-foreground shrink-0">
+                              {format(new Date(log.ts), "HH:mm:ss")}
                             </span>
-                            <span className={log.level === "error" ? "text-destructive" : log.level === "success" ? "text-green-500" : ""}>
+                            <span className={log.level === "error" ? "text-destructive" : log.level === "success" ? "text-green-500" : log.level === "warn" ? "text-yellow-600" : ""}>
                               {log.message}
                             </span>
                           </div>
                         ))
                       )}
+                      <div ref={logsEndRef} />
                     </div>
                   </ScrollArea>
                 </CardContent>
@@ -1091,25 +1309,35 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
               {/* Show final logs */}
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <Terminal className="h-4 w-4" />
-                    Execution Log
+                  <CardTitle className="text-sm flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <Terminal className="h-4 w-4" />
+                      Execution Log ({clientLogs.length} entries)
+                    </span>
+                    <Button variant="ghost" size="sm" onClick={handleCopyLogs}>
+                      <Copy className="h-3 w-3 mr-1" /> Copy Logs
+                    </Button>
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ScrollArea className="h-[200px]">
                     <div className="space-y-2 pr-4 font-mono text-xs">
-                      {progressLogs.map((log) => (
-                        <div key={log.id} className="flex items-start gap-2">
-                          {getLogIcon(log.level)}
-                          <span className="text-muted-foreground">
-                            {format(new Date(log.created_at), "HH:mm:ss")}
-                          </span>
-                          <span className={log.level === "error" ? "text-destructive" : log.level === "success" ? "text-green-500" : ""}>
-                            {log.message}
-                          </span>
-                        </div>
-                      ))}
+                      {clientLogs.length === 0 ? (
+                        <p className="text-muted-foreground">No logs recorded</p>
+                      ) : (
+                        clientLogs.map((log, idx) => (
+                          <div key={idx} className="flex items-start gap-2">
+                            {getLogIcon(log.level)}
+                            <span className="text-muted-foreground shrink-0">
+                              {format(new Date(log.ts), "HH:mm:ss")}
+                            </span>
+                            <span className={log.level === "error" ? "text-destructive" : log.level === "success" ? "text-green-500" : log.level === "warn" ? "text-yellow-600" : ""}>
+                              {log.message}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                      <div ref={logsEndRef} />
                     </div>
                   </ScrollArea>
                 </CardContent>
