@@ -359,6 +359,8 @@ async function createLawmaticsEvent(
   const canonical: Record<string, any> = {
     name: eventName,
     description,
+    starts_at: startDatetime,
+    ends_at: endDatetime,
     start_date: startParts.date, // YYYY-MM-DD
     start_time: startParts.time, // HH:mm
     end_date: endParts.date,
