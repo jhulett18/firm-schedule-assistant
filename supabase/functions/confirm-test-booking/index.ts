@@ -472,7 +472,7 @@ async function createLawmaticsAppointment(
   };
 
   // Fallback payload uses HH:mm:ss
-  const canonicalSeconds = {
+  const canonicalSeconds: Record<string, any> = {
     ...canonical,
     start_time: startParts.timeSeconds,
     end_time: endParts.timeSeconds,
@@ -492,16 +492,16 @@ async function createLawmaticsAppointment(
   }
 
   // Mirror IDs to seconds payload
-  if (canonical.event_type_id) canonicalSeconds.event_type_id = canonical.event_type_id;
-  if (canonical.location_id) canonicalSeconds.location_id = canonical.location_id;
-  if (canonical.user_id) {
-    canonicalSeconds.user_id = canonical.user_id;
-    canonicalSeconds.user_ids = canonical.user_ids;
-  }
-  if (canonical.contact_id) {
-    canonicalSeconds.contact_id = canonical.contact_id;
-    canonicalSeconds.eventable_type = canonical.eventable_type;
-    canonicalSeconds.eventable_id = canonical.eventable_id;
+  for (const k of [
+    "event_type_id",
+    "location_id",
+    "user_id",
+    "user_ids",
+    "contact_id",
+    "eventable_type",
+    "eventable_id",
+  ]) {
+    if (canonical[k] !== undefined) canonicalSeconds[k] = canonical[k];
   }
 
   const computeMissingFields = (rb: Record<string, any> | null): string[] => {

@@ -669,6 +669,36 @@ export async function createLawmaticsAppointment(
     if (canonical[k] !== undefined) canonicalSeconds[k] = canonical[k];
   }
 
+  // Helper to compute which required fields are missing from readback
+  const computeMissingFields = (rb: Record<string, any> | null): string[] => {
+    const missing: string[] = [];
+    if (!rb) return ["readback"];
+
+    if (!rb.user_id) missing.push("user_id");
+
+    const hasTimeStart = rb.starts_at || (rb.start_date && rb.start_time);
+    const hasTimeEnd = rb.ends_at || (rb.end_date && rb.end_time);
+    if (!hasTimeStart) missing.push("start_time");
+    if (!hasTimeEnd) missing.push("end_time");
+
+    if (opts.eventTypeId && !rb.event_type_id) missing.push("event_type_id");
+    if (opts.requiresLocation && opts.locationId && !rb.location_id) missing.push("location_id");
+    if (opts.contactId && !rb.contact_id && !rb.matter_id) missing.push("contact_id");
+
+    return missing;
+  };
+
+  // Helper to post an event and track attempt
+  const postEvent = async (
+    step: string,
+    payload: any
+  ): Promise<{ createdId: string | null; status: number; ok: boolean; excerpt: string }> => {
+    const res = await lawmaticsFetch(accessToken, "POST", "/v1/events", payload);
+    const { ok, status, json, excerpt } = await lawmaticsJson(res);
+    attempts.push({ step, status, ok, note: excerpt || undefined });
+    return { createdId: pickString(json?.data?.id ?? json?.id), status, ok, excerpt };
+  };
+
   // Attempt 1: HH:mm
   console.log("[Lawmatics] Creating appointment attempt 1 (HH:mm):", {
     ...canonical,
