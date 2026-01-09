@@ -13,6 +13,45 @@ interface ConfirmTestBookingRequest {
   runId: string;
 }
 
+interface IntegrationError {
+  system: "lawmatics" | "google";
+  status?: number;
+  message: string;
+  responseExcerpt?: string;
+}
+
+// Helper to convert ISO datetime to date/time parts in a given timezone
+function toLocalDateTimeParts(isoDatetime: string, timezone: string): { date: string; time: string } {
+  const date = new Date(isoDatetime);
+  
+  // Get date in YYYY-MM-DD format using en-CA locale (gives ISO format reliably)
+  const dateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  
+  const year = dateParts.find(p => p.type === 'year')?.value || '';
+  const month = dateParts.find(p => p.type === 'month')?.value || '';
+  const day = dateParts.find(p => p.type === 'day')?.value || '';
+  const dateStr = `${year}-${month}-${day}`;
+  
+  // Get time in HH:mm format using en-GB locale with 24h format
+  const timeParts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  
+  const hour = timeParts.find(p => p.type === 'hour')?.value || '00';
+  const minute = timeParts.find(p => p.type === 'minute')?.value || '00';
+  const timeStr = `${hour}:${minute}`;
+  
+  return { date: dateStr, time: timeStr };
+}
+
 // Helper to write progress log
 async function writeLog(
   supabase: any,
@@ -80,6 +119,176 @@ async function refreshAccessToken(
   }
 }
 
+// Helper to create Lawmatics event with retry logic
+async function createLawmaticsEvent(
+  accessToken: string,
+  eventName: string,
+  description: string,
+  startDatetime: string,
+  endDatetime: string,
+  timezone: string,
+  eventTypeId?: string | null,
+  locationId?: string | null,
+  supabase?: any,
+  meetingId?: string,
+  runId?: string
+): Promise<{ success: boolean; appointmentId?: string | null; error?: IntegrationError }> {
+  
+  // Calculate date/time parts for fallback
+  const startParts = toLocalDateTimeParts(startDatetime, timezone);
+  const endParts = toLocalDateTimeParts(endDatetime, timezone);
+  
+  // Attempt 1: Use starts_at/ends_at (ISO format)
+  const payloadAttempt1: Record<string, any> = {
+    name: eventName,
+    starts_at: startDatetime,
+    ends_at: endDatetime,
+    description,
+  };
+  
+  if (eventTypeId) payloadAttempt1.event_type_id = eventTypeId;
+  if (locationId) payloadAttempt1.location_id = locationId;
+  
+  await writeLog(supabase, meetingId!, runId!, "lawmatics_request_attempt_1", "info", "Attempting Lawmatics create with starts_at/ends_at", {
+    fields: Object.keys(payloadAttempt1),
+    starts_at: startDatetime,
+    ends_at: endDatetime,
+  });
+  
+  console.log("[Lawmatics] Attempt 1 payload:", JSON.stringify(payloadAttempt1));
+  
+  try {
+    const response1 = await fetch("https://api.lawmatics.com/v1/events", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payloadAttempt1),
+    });
+    
+    const responseText1 = await response1.text();
+    console.log("[Lawmatics] Attempt 1 response:", response1.status, responseText1.slice(0, 500));
+    
+    if (response1.ok) {
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText1);
+      } catch {
+        responseData = {};
+      }
+      const appointmentId = responseData.data?.id || responseData.id || null;
+      
+      await writeLog(supabase, meetingId!, runId!, "lawmatics_success", "success", "Lawmatics event created (attempt 1)", {
+        appointmentId,
+        status: response1.status,
+      });
+      
+      return { success: true, appointmentId };
+    }
+    
+    // Check if we should retry with date/time format
+    const shouldRetry = response1.status === 422 && 
+      (responseText1.includes("start_date") || responseText1.includes("start_time"));
+    
+    if (!shouldRetry) {
+      await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics API error (attempt 1)", {
+        status: response1.status,
+        error: responseText1.slice(0, 500),
+      });
+      
+      return {
+        success: false,
+        error: {
+          system: "lawmatics",
+          status: response1.status,
+          message: `Lawmatics API error: ${response1.status}`,
+          responseExcerpt: responseText1.slice(0, 500),
+        },
+      };
+    }
+    
+    // Attempt 2: Use start_date/start_time/end_date/end_time
+    await writeLog(supabase, meetingId!, runId!, "lawmatics_request_attempt_2", "info", "Retrying with start_date/start_time format", {
+      start_date: startParts.date,
+      start_time: startParts.time,
+      end_date: endParts.date,
+      end_time: endParts.time,
+      timezone,
+    });
+    
+    const payloadAttempt2: Record<string, any> = {
+      name: eventName,
+      description,
+      start_date: startParts.date,
+      start_time: startParts.time,
+      end_date: endParts.date,
+      end_time: endParts.time,
+    };
+    
+    if (eventTypeId) payloadAttempt2.event_type_id = eventTypeId;
+    if (locationId) payloadAttempt2.location_id = locationId;
+    
+    console.log("[Lawmatics] Attempt 2 payload:", JSON.stringify(payloadAttempt2));
+    
+    const response2 = await fetch("https://api.lawmatics.com/v1/events", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payloadAttempt2),
+    });
+    
+    const responseText2 = await response2.text();
+    console.log("[Lawmatics] Attempt 2 response:", response2.status, responseText2.slice(0, 500));
+    
+    if (response2.ok) {
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText2);
+      } catch {
+        responseData = {};
+      }
+      const appointmentId = responseData.data?.id || responseData.id || null;
+      
+      await writeLog(supabase, meetingId!, runId!, "lawmatics_success", "success", "Lawmatics event created (attempt 2)", {
+        appointmentId,
+        status: response2.status,
+      });
+      
+      return { success: true, appointmentId };
+    }
+    
+    await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics API error (attempt 2)", {
+      status: response2.status,
+      error: responseText2.slice(0, 500),
+    });
+    
+    return {
+      success: false,
+      error: {
+        system: "lawmatics",
+        status: response2.status,
+        message: `Lawmatics API error after retry: ${response2.status}`,
+        responseExcerpt: responseText2.slice(0, 500),
+      },
+    };
+    
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics request failed", { error: errorMessage });
+    
+    return {
+      success: false,
+      error: {
+        system: "lawmatics",
+        message: `Lawmatics request failed: ${errorMessage}`,
+      },
+    };
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -90,12 +299,13 @@ serve(async (req) => {
   const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const errors: IntegrationError[] = [];
 
   try {
     // Verify authentication
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify({ success: false, error: { message: "Unauthorized" } }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -107,7 +317,7 @@ serve(async (req) => {
 
     const { data: { user }, error: authError } = await userSupabase.auth.getUser();
     if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify({ success: false, error: { message: "Unauthorized" } }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -118,7 +328,7 @@ serve(async (req) => {
     const { meetingId, startDatetime, endDatetime, runId } = body;
 
     if (!meetingId || !startDatetime || !endDatetime || !runId) {
-      return new Response(JSON.stringify({ error: "Missing required fields" }), {
+      return new Response(JSON.stringify({ success: false, error: { message: "Missing required fields" } }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -139,7 +349,7 @@ serve(async (req) => {
 
     if (meetingError || !meeting) {
       await writeLog(supabase, meetingId, runId, "error", "error", "Meeting not found", { error: meetingError?.message });
-      return new Response(JSON.stringify({ error: "Meeting not found" }), {
+      return new Response(JSON.stringify({ success: false, error: { message: "Meeting not found" } }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -149,10 +359,11 @@ serve(async (req) => {
     const isTest = preferences.is_test === true;
     const adminCalendarId = preferences.admin_calendar_id;
     const sendInvites = preferences.send_invites === true;
+    const timezone = meeting.timezone || "America/New_York";
 
     if (!isTest) {
       await writeLog(supabase, meetingId, runId, "error", "error", "Not a test booking");
-      return new Response(JSON.stringify({ error: "Not a test booking" }), {
+      return new Response(JSON.stringify({ success: false, error: { message: "Not a test booking" } }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -199,7 +410,6 @@ serve(async (req) => {
 
     // Create Lawmatics appointment
     let lawmaticsAppointmentId: string | null = null;
-    let lawmaticsError: string | null = null;
 
     await writeLog(supabase, meetingId, runId, "lawmatics_start", "info", "Checking Lawmatics connection...");
 
@@ -211,63 +421,36 @@ serve(async (req) => {
       .maybeSingle();
 
     if (lawmaticsConnection?.access_token) {
-      await writeLog(supabase, meetingId, runId, "lawmatics_request", "info", "Creating Lawmatics event...");
+      const client = meeting.external_attendees?.[0];
+      const eventName = `[TEST] ${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
 
-      try {
-        const client = meeting.external_attendees?.[0];
-        const eventName = `[TEST] ${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+      const descriptionParts = [
+        "⚠️ TEST BOOKING - Created from Admin Test My Booking",
+        "",
+        `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
+        `Duration: ${meeting.duration_minutes} minutes`,
+        `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || "In Person") : "Zoom"}`,
+        hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
+      ].filter(Boolean).join("\n");
 
-        const descriptionParts = [
-          "⚠️ TEST BOOKING - Created from Admin Test My Booking",
-          "",
-          `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
-          `Duration: ${meeting.duration_minutes} minutes`,
-          `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || "In Person") : "Zoom"}`,
-          hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
-        ].filter(Boolean).join("\n");
+      const lawmaticsResult = await createLawmaticsEvent(
+        lawmaticsConnection.access_token,
+        eventName,
+        descriptionParts,
+        startDatetime,
+        endDatetime,
+        timezone,
+        meeting.meeting_types?.lawmatics_event_type_id,
+        meeting.location_mode === "InPerson" ? meeting.rooms?.lawmatics_location_id : null,
+        supabase,
+        meetingId,
+        runId
+      );
 
-        const lawmaticsPayload: Record<string, any> = {
-          name: eventName,
-          starts_at: startDatetime,
-          ends_at: endDatetime,
-          description: descriptionParts,
-        };
-
-        if (meeting.meeting_types?.lawmatics_event_type_id) {
-          lawmaticsPayload.event_type_id = meeting.meeting_types.lawmatics_event_type_id;
-        }
-
-        if (meeting.location_mode === "InPerson" && meeting.rooms?.lawmatics_location_id) {
-          lawmaticsPayload.location_id = meeting.rooms.lawmatics_location_id;
-        }
-
-        const lawmaticsResponse = await fetch("https://api.lawmatics.com/v1/events", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${lawmaticsConnection.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(lawmaticsPayload),
-        });
-
-        if (lawmaticsResponse.ok) {
-          const responseData = await lawmaticsResponse.json();
-          lawmaticsAppointmentId = responseData.data?.id || responseData.id || null;
-          await writeLog(supabase, meetingId, runId, "lawmatics_success", "success", "Lawmatics event created", {
-            appointmentId: lawmaticsAppointmentId,
-            status: lawmaticsResponse.status,
-          });
-        } else {
-          const errorText = await lawmaticsResponse.text();
-          lawmaticsError = `Status ${lawmaticsResponse.status}: ${errorText.slice(0, 200)}`;
-          await writeLog(supabase, meetingId, runId, "lawmatics_error", "error", "Lawmatics API error", {
-            status: lawmaticsResponse.status,
-            error: errorText.slice(0, 500),
-          });
-        }
-      } catch (err) {
-        lawmaticsError = err instanceof Error ? err.message : String(err);
-        await writeLog(supabase, meetingId, runId, "lawmatics_error", "error", "Lawmatics request failed", { error: lawmaticsError });
+      if (lawmaticsResult.success) {
+        lawmaticsAppointmentId = lawmaticsResult.appointmentId || null;
+      } else if (lawmaticsResult.error) {
+        errors.push(lawmaticsResult.error);
       }
     } else {
       await writeLog(supabase, meetingId, runId, "lawmatics_skip", "warn", "No Lawmatics connection configured");
@@ -292,7 +475,6 @@ serve(async (req) => {
       .maybeSingle();
 
     let googleEventId: string | null = null;
-    let googleError: string | null = null;
 
     if (calendarConnection && adminCalendarId) {
       try {
@@ -316,8 +498,8 @@ serve(async (req) => {
         const eventBody = {
           summary: eventSummary,
           description: `⚠️ TEST BOOKING - Created from Admin Test My Booking\n\nMeeting Type: ${meeting.meeting_types?.name || "Meeting"}\nRoom: ${meeting.rooms?.name || "N/A"}`,
-          start: { dateTime: startDatetime, timeZone: meeting.timezone || "America/New_York" },
-          end: { dateTime: endDatetime, timeZone: meeting.timezone || "America/New_York" },
+          start: { dateTime: startDatetime, timeZone: timezone },
+          end: { dateTime: endDatetime, timeZone: timezone },
           attendees,
         };
 
@@ -348,15 +530,24 @@ serve(async (req) => {
           });
         } else {
           const errorText = await calendarResponse.text();
-          googleError = `Status ${calendarResponse.status}: ${errorText.slice(0, 200)}`;
+          errors.push({
+            system: "google",
+            status: calendarResponse.status,
+            message: `Google Calendar API error: ${calendarResponse.status}`,
+            responseExcerpt: errorText.slice(0, 500),
+          });
           await writeLog(supabase, meetingId, runId, "google_error", "error", "Google Calendar API error", {
             status: calendarResponse.status,
             error: errorText.slice(0, 500),
           });
         }
       } catch (err) {
-        googleError = err instanceof Error ? err.message : String(err);
-        await writeLog(supabase, meetingId, runId, "google_error", "error", "Google Calendar request failed", { error: googleError });
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        errors.push({
+          system: "google",
+          message: `Google Calendar request failed: ${errorMessage}`,
+        });
+        await writeLog(supabase, meetingId, runId, "google_error", "error", "Google Calendar request failed", { error: errorMessage });
       }
     } else {
       await writeLog(supabase, meetingId, runId, "google_skip", "warn", "No Google calendar connection or calendar ID");
@@ -376,7 +567,7 @@ serve(async (req) => {
     }
 
     // Log completion
-    const hasErrors = lawmaticsError || googleError;
+    const hasErrors = errors.length > 0;
     await writeLog(
       supabase,
       meetingId,
@@ -386,9 +577,8 @@ serve(async (req) => {
       hasErrors ? "Test booking completed with some errors" : "Test booking completed successfully",
       {
         lawmaticsAppointmentId,
-        lawmaticsError,
         googleEventId,
-        googleError,
+        errors,
       }
     );
 
@@ -404,23 +594,30 @@ serve(async (req) => {
         lawmatics_appointment_id: lawmaticsAppointmentId,
         google_event_id: googleEventId,
         admin_calendar_id: adminCalendarId,
+        errors: hasErrors ? errors : undefined,
       },
     });
 
     return new Response(
       JSON.stringify({
         success: true,
+        ok: true,
         meetingId,
         lawmaticsAppointmentId,
         googleEventId,
         hasErrors,
+        errors,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
     console.error("Error in confirm-test-booking:", error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ 
+        success: false, 
+        ok: false,
+        error: { message: error instanceof Error ? error.message : "Unknown error" } 
+      }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
