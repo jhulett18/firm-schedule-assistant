@@ -1375,9 +1375,26 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                         </div>
 
                         {bookingResult.lawmaticsAppointmentId && bookingResult.lawmaticsIsValid === false && (
-                          <p className="text-xs text-yellow-600 ml-6">
-                            Missing: {(bookingResult.lawmatics?.missingFields || []).join(", ") || "(unknown)"}
-                          </p>
+                          <div className="text-xs text-yellow-600 ml-6 space-y-1">
+                            <p>Missing: {(bookingResult.lawmatics?.missingFields || []).join(", ") || "(unknown)"}</p>
+                            {bookingResult.lawmatics?.winningVariant && (
+                              <p className="text-muted-foreground">Variant used: {bookingResult.lawmatics.winningVariant}</p>
+                            )}
+                          </div>
+                        )}
+                        {bookingResult.lawmatics?.attemptedVariants?.length > 0 && (
+                          <details className="mt-2 text-xs">
+                            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                              View Attempted Variants ({bookingResult.lawmatics.attemptedVariants.length})
+                            </summary>
+                            <div className="mt-2 p-2 bg-muted rounded text-xs font-mono">
+                              {bookingResult.lawmatics.attemptedVariants.map((v: string, i: number) => (
+                                <div key={i} className={v === bookingResult.lawmatics?.winningVariant ? "text-green-600 font-medium" : ""}>
+                                  {v}{v === bookingResult.lawmatics?.winningVariant ? " ✓" : ""}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
                         )}
                       </div>
 
