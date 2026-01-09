@@ -36,7 +36,7 @@ export default function Dashboard() {
               Welcome to LawScheduler
             </h1>
             <p className="text-muted-foreground mt-1">
-              Send scheduling links to clients without maintaining hundreds of Lawmatics schedulers.
+              Send scheduling links to clients without managing dozens of Lawmatics schedulers.
             </p>
           </div>
           {isAdmin && (
