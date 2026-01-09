@@ -1,0 +1,385 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+interface TestAvailableSlotsRequest {
+  meetingId: string;
+  dateCursor?: string;
+}
+
+interface TimeSlot {
+  start: string;
+  end: string;
+  label: string;
+}
+
+interface BusyInterval {
+  start: string;
+  end: string;
+}
+
+// Refresh access token helper
+async function refreshAccessToken(
+  connectionId: string,
+  refreshToken: string,
+  supabase: any
+): Promise<{ access_token: string; expires_at: string } | null> {
+  const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
+  const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
+
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    console.error("Missing Google OAuth credentials for refresh");
+    return null;
+  }
+
+  try {
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      console.error("Token refresh failed:", await tokenResponse.text());
+      return null;
+    }
+
+    const tokens = await tokenResponse.json();
+    const tokenExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+
+    const { error: updateError } = await supabase
+      .from("calendar_connections")
+      .update({
+        access_token: tokens.access_token,
+        token_expires_at: tokenExpiresAt,
+        ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", connectionId);
+
+    if (updateError) {
+      console.error("Failed to update refreshed token:", updateError);
+      return null;
+    }
+
+    return { access_token: tokens.access_token, expires_at: tokenExpiresAt };
+  } catch (err) {
+    console.error("Error during token refresh:", err);
+    return null;
+  }
+}
+
+async function getBusyIntervalsForCalendar(
+  connection: any,
+  calendarId: string,
+  start: string,
+  end: string,
+  supabase: any
+): Promise<BusyInterval[]> {
+  let accessToken = connection.access_token;
+
+  // Check if token needs refresh
+  const tokenExpiresAt = connection.token_expires_at ? new Date(connection.token_expires_at) : null;
+  const fiveMinutesFromNow = new Date(Date.now() + 5 * 60 * 1000);
+
+  if (tokenExpiresAt && tokenExpiresAt < fiveMinutesFromNow && connection.refresh_token) {
+    const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
+    if (refreshResult) {
+      accessToken = refreshResult.access_token;
+    }
+  }
+
+  const response = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      timeMin: start,
+      timeMax: end,
+      items: [{ id: calendarId }],
+    }),
+  });
+
+  if (!response.ok) {
+    console.error("Google FreeBusy API error:", await response.text());
+    return [];
+  }
+
+  const data = await response.json();
+  const calendar = data.calendars?.[calendarId];
+  return calendar?.busy || [];
+}
+
+function suggestSlots(
+  busyIntervals: BusyInterval[],
+  startDate: Date,
+  endDate: Date,
+  durationMinutes: number
+): TimeSlot[] {
+  const businessHoursStart = "09:00";
+  const businessHoursEnd = "17:00";
+  const lunchStart = "12:00";
+  const lunchEnd = "13:00";
+  const minimumNoticeMinutes = 60;
+
+  const slots: TimeSlot[] = [];
+  const now = new Date();
+  const minimumNoticeTime = new Date(now.getTime() + minimumNoticeMinutes * 60 * 1000);
+
+  const sortedBusy = busyIntervals
+    .map((b) => ({ start: new Date(b.start), end: new Date(b.end) }))
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+
+  const currentDate = new Date(startDate);
+  currentDate.setHours(0, 0, 0, 0);
+
+  while (currentDate <= endDate && slots.length < 30) {
+    const dayOfWeek = currentDate.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      currentDate.setDate(currentDate.getDate() + 1);
+      continue;
+    }
+
+    const [startHour, startMin] = businessHoursStart.split(":").map(Number);
+    const [endHour, endMin] = businessHoursEnd.split(":").map(Number);
+
+    const dayStart = new Date(currentDate);
+    dayStart.setHours(startHour, startMin, 0, 0);
+
+    const dayEnd = new Date(currentDate);
+    dayEnd.setHours(endHour, endMin, 0, 0);
+
+    const [lunchStartHour, lunchStartMin] = lunchStart.split(":").map(Number);
+    const [lunchEndHour, lunchEndMin] = lunchEnd.split(":").map(Number);
+    const lunchStartTime = new Date(currentDate);
+    lunchStartTime.setHours(lunchStartHour, lunchStartMin, 0, 0);
+    const lunchEndTime = new Date(currentDate);
+    lunchEndTime.setHours(lunchEndHour, lunchEndMin, 0, 0);
+
+    const dayBusy = sortedBusy.filter((b) => b.start < dayEnd && b.end > dayStart);
+    dayBusy.push({ start: lunchStartTime, end: lunchEndTime });
+    dayBusy.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    let slotStart = dayStart;
+
+    for (const busy of dayBusy) {
+      if (busy.start > slotStart) {
+        const gapEnd = busy.start;
+        const gapDuration = (gapEnd.getTime() - slotStart.getTime()) / (1000 * 60);
+
+        if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
+          let currentSlotStart = new Date(slotStart);
+          while (
+            currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= gapEnd.getTime() &&
+            slots.length < 30
+          ) {
+            if (currentSlotStart >= minimumNoticeTime) {
+              const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
+              const dayLabel = currentSlotStart.toLocaleDateString("en-US", {
+                weekday: "long",
+                month: "short",
+                day: "numeric",
+              });
+              const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+              });
+
+              slots.push({
+                start: currentSlotStart.toISOString(),
+                end: slotEnd.toISOString(),
+                label: `${dayLabel} at ${timeLabel}`,
+              });
+            }
+            currentSlotStart = new Date(currentSlotStart.getTime() + 30 * 60 * 1000);
+          }
+        }
+      }
+
+      if (busy.end > slotStart) {
+        slotStart = busy.end;
+      }
+    }
+
+    if (slotStart < dayEnd) {
+      const gapDuration = (dayEnd.getTime() - slotStart.getTime()) / (1000 * 60);
+
+      if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
+        let currentSlotStart = new Date(slotStart);
+        while (
+          currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= dayEnd.getTime() &&
+          slots.length < 30
+        ) {
+          if (currentSlotStart >= minimumNoticeTime) {
+            const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
+            const dayLabel = currentSlotStart.toLocaleDateString("en-US", {
+              weekday: "long",
+              month: "short",
+              day: "numeric",
+            });
+            const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
+              hour: "numeric",
+              minute: "2-digit",
+              hour12: true,
+            });
+
+            slots.push({
+              start: currentSlotStart.toISOString(),
+              end: slotEnd.toISOString(),
+              label: `${dayLabel} at ${timeLabel}`,
+            });
+          }
+          currentSlotStart = new Date(currentSlotStart.getTime() + 30 * 60 * 1000);
+        }
+      }
+    }
+
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  return slots;
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+    // Verify authentication
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "Unauthorized", slots: [] }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const userSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized", slots: [] }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    // Parse request
+    const body: TestAvailableSlotsRequest = await req.json();
+    const { meetingId, dateCursor } = body;
+
+    if (!meetingId) {
+      return new Response(JSON.stringify({ error: "Meeting ID required", slots: [] }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Fetch meeting with preferences
+    const { data: meeting, error: meetingError } = await supabase
+      .from("meetings")
+      .select("*, meeting_types(name), rooms(name, resource_email)")
+      .eq("id", meetingId)
+      .single();
+
+    if (meetingError || !meeting) {
+      return new Response(JSON.stringify({ error: "Meeting not found", slots: [] }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Get admin's test calendar ID from preferences
+    const preferences = meeting.preferences as Record<string, any> || {};
+    const adminCalendarId = preferences.admin_calendar_id;
+    const adminCalendarUserId = preferences.admin_calendar_user_id;
+
+    if (!adminCalendarId || !adminCalendarUserId) {
+      return new Response(
+        JSON.stringify({ error: "Test booking preferences not set", slots: [] }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log("Fetching availability for calendar:", adminCalendarId);
+
+    // Get calendar connection for the admin
+    const { data: connection, error: connError } = await supabase
+      .from("calendar_connections")
+      .select("*")
+      .eq("user_id", adminCalendarUserId)
+      .eq("provider", "google")
+      .maybeSingle();
+
+    if (connError || !connection) {
+      return new Response(
+        JSON.stringify({ error: "No Google calendar connection found", slots: [] }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const searchWindowDays = 14;
+    const startDate = dateCursor ? new Date(dateCursor) : new Date();
+    const endDate = new Date(startDate.getTime() + searchWindowDays * 24 * 60 * 60 * 1000);
+
+    // Fetch busy intervals for the specific test calendar
+    const busyIntervals = await getBusyIntervalsForCalendar(
+      connection,
+      adminCalendarId,
+      startDate.toISOString(),
+      endDate.toISOString(),
+      supabase
+    );
+
+    console.log(`Found ${busyIntervals.length} busy intervals for calendar ${adminCalendarId}`);
+
+    // Also check room availability if in-person
+    if (meeting.location_mode === "InPerson" && meeting.rooms?.resource_email) {
+      const roomBusy = await getBusyIntervalsForCalendar(
+        connection,
+        meeting.rooms.resource_email,
+        startDate.toISOString(),
+        endDate.toISOString(),
+        supabase
+      );
+      busyIntervals.push(...roomBusy);
+      console.log(`Added ${roomBusy.length} room busy intervals`);
+    }
+
+    // Generate available slots
+    const slots = suggestSlots(busyIntervals, startDate, endDate, meeting.duration_minutes);
+
+    console.log(`Returning ${slots.length} available slots`);
+
+    return new Response(JSON.stringify({ slots }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    console.error("Error in test-booking-available-slots:", error);
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error", slots: [] }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+});
