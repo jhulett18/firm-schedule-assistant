@@ -9,6 +9,48 @@ const corsHeaders = {
 const CACHE_KEY = "locations";
 const CACHE_TTL_HOURS = 24;
 
+// Robust name resolver - tries multiple field patterns
+function resolveDisplayName(item: any): string {
+  // Direct fields - prefer name, then address-related fields
+  if (item.name && typeof item.name === "string") return item.name;
+  if (item.title && typeof item.title === "string") return item.title;
+  if (item.label && typeof item.label === "string") return item.label;
+  if (item.display_name && typeof item.display_name === "string") return item.display_name;
+  
+  // Address fields - locations often use these
+  if (item.address && typeof item.address === "string") return item.address;
+  if (item.full_address && typeof item.full_address === "string") return item.full_address;
+  if (item.location_name && typeof item.location_name === "string") return item.location_name;
+  
+  // JSON:API style nested attributes
+  if (item.attributes) {
+    if (item.attributes.name && typeof item.attributes.name === "string") return item.attributes.name;
+    if (item.attributes.title && typeof item.attributes.title === "string") return item.attributes.title;
+    if (item.attributes.label && typeof item.attributes.label === "string") return item.attributes.label;
+    if (item.attributes.address && typeof item.attributes.address === "string") return item.attributes.address;
+    if (item.attributes.full_address && typeof item.attributes.full_address === "string") return item.attributes.full_address;
+  }
+  
+  // Translations - prefer English
+  if (item.translations?.en) {
+    if (item.translations.en.name && typeof item.translations.en.name === "string") return item.translations.en.name;
+    if (item.translations.en.title && typeof item.translations.en.title === "string") return item.translations.en.title;
+  }
+  
+  // Fallback
+  return `Location ${item.id}`;
+}
+
+// Extract array from various response shapes
+function extractItemsArray(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.data)) return data.data;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.locations)) return data.locations;
+  if (Array.isArray(data.appointment_locations)) return data.appointment_locations;
+  return [];
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -54,13 +96,17 @@ serve(async (req) => {
 
     const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Check if force refresh requested
-    let body: { forceRefresh?: boolean } = {};
+    // Parse request body
+    let body: { forceRefresh?: boolean; debug?: boolean } = {};
     try {
       body = await req.json();
     } catch {
       // No body or invalid JSON, use defaults
     }
+    
+    // Also check query param for debug
+    const url = new URL(req.url);
+    const debugMode = body.debug === true || url.searchParams.get("debug") === "1";
     const forceRefresh = body.forceRefresh === true;
 
     // Check cache first (unless force refresh)
@@ -109,49 +155,111 @@ serve(async (req) => {
       });
     }
 
-    // Try multiple endpoint variations
+    // Try multiple endpoint variations - locations first
     const endpoints = [
-      "https://api.lawmatics.com/v1/locations?per_page=200",
-      "https://api.lawmatics.com/v1/location?per_page=200",
+      "https://api.lawmatics.com/v1/locations",
+      "https://api.lawmatics.com/v1/location",
+      "https://api.lawmatics.com/v1/appointment_locations",
+      "https://api.lawmatics.com/v1/appointment-locations",
+      "https://api.lawmatics.com/v1/offices",
+      "https://api.lawmatics.com/v1/office",
     ];
 
-    let items: { id: string; name: string }[] = [];
+    let allItems: { id: string; name: string }[] = [];
     let fetchedSuccessfully = false;
     let lastError = "";
+    let debugInfo: any = null;
+    let sampleRaw: any[] = [];
 
-    for (const endpoint of endpoints) {
-      console.log("Trying endpoint:", endpoint);
+    for (const baseEndpoint of endpoints) {
+      console.log("Trying endpoint:", baseEndpoint);
+      let page = 1;
+      let pageItems: any[] = [];
+      let hasMorePages = true;
+      
       try {
-        const response = await fetch(endpoint, {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${lawmaticsConnection.access_token}`,
-            "Content-Type": "application/json",
-          },
-        });
+        // Pagination loop
+        while (hasMorePages) {
+          const endpoint = `${baseEndpoint}?per_page=200&page=${page}`;
+          console.log(`Fetching page ${page}:`, endpoint);
+          
+          const response = await fetch(endpoint, {
+            method: "GET",
+            headers: {
+              "Authorization": `Bearer ${lawmaticsConnection.access_token}`,
+              "Content-Type": "application/json",
+            },
+          });
 
-        if (response.ok) {
-          const data = await response.json();
-          // Normalize response - handle different response structures
-          const rawItems = data.data || data.items || data || [];
-          items = Array.isArray(rawItems) 
-            ? rawItems.map((item: any) => ({
-                id: String(item.id),
-                name: item.name || item.title || item.address || `Location ${item.id}`,
-              }))
-            : [];
+          if (response.ok) {
+            const data = await response.json();
+            console.log("Raw response structure:", JSON.stringify(data).slice(0, 500));
+            const rawItems = extractItemsArray(data);
+            console.log(`Found ${rawItems.length} raw items on page ${page}`);
+            
+            // Store samples for debug on first page
+            if (page === 1 && rawItems.length > 0) {
+              sampleRaw = rawItems.slice(0, 3);
+              console.log("Sample raw items:", JSON.stringify(sampleRaw));
+            }
+            
+            if (rawItems.length === 0) {
+              hasMorePages = false;
+            } else {
+              pageItems = pageItems.concat(rawItems);
+              page++;
+              // Safety limit
+              if (page > 50) hasMorePages = false;
+            }
+          } else if (response.status === 401 || response.status === 403) {
+            lastError = "Lawmatics token invalid - please reconnect";
+            hasMorePages = false;
+            break;
+          } else if (response.status === 404 || response.status === 405) {
+            // This endpoint doesn't exist, try next
+            hasMorePages = false;
+            break;
+          } else {
+            const errorText = await response.text();
+            lastError = `API error: ${response.status} - ${errorText.slice(0, 100)}`;
+            hasMorePages = false;
+          }
+        }
+        
+        // If we got any items from this endpoint, use them
+        if (pageItems.length > 0) {
+          // Normalize items with robust name resolution
+          allItems = pageItems.map((item: any) => ({
+            id: String(item.id),
+            name: resolveDisplayName(item),
+          }));
           fetchedSuccessfully = true;
-          console.log("Successfully fetched", items.length, "locations from", endpoint);
+          console.log(`Successfully fetched ${allItems.length} locations from ${baseEndpoint}`);
+          
+          // Build debug info if requested
+          if (debugMode) {
+            const sampleKeys = sampleRaw.length > 0 
+              ? [...new Set(sampleRaw.flatMap(item => Object.keys(item)))]
+              : [];
+            
+            debugInfo = {
+              debug: true,
+              endpoint_used: baseEndpoint,
+              total_pages: page - 1,
+              sample_raw: sampleRaw,
+              sample_keys: sampleKeys,
+              sample_resolved: sampleRaw.map(item => ({
+                id: item.id,
+                resolved_name: resolveDisplayName(item),
+              })),
+            };
+          }
+          
           break;
-        } else if (response.status === 401 || response.status === 403) {
-          lastError = "Lawmatics token invalid - please reconnect";
-          break; // Don't try other endpoints on auth errors
-        } else if (response.status !== 404) {
-          lastError = `API error: ${response.status}`;
         }
       } catch (err) {
         lastError = `Network error: ${err instanceof Error ? err.message : String(err)}`;
-        console.error("Error fetching from", endpoint, lastError);
+        console.error("Error fetching from", baseEndpoint, lastError);
       }
     }
 
@@ -174,16 +282,23 @@ serve(async (req) => {
       .from("lawmatics_reference_data")
       .upsert({
         key: CACHE_KEY,
-        data: { items },
+        data: { items: allItems },
         fetched_at: now,
       }, { onConflict: "key" });
 
-    return new Response(JSON.stringify({
-      items,
+    const response: any = {
+      items: allItems,
       fetched_at: now,
       cached: false,
       ...(lastError && !fetchedSuccessfully ? { warning: lastError } : {}),
-    }), {
+    };
+    
+    // Include debug info if requested
+    if (debugInfo) {
+      Object.assign(response, debugInfo);
+    }
+
+    return new Response(JSON.stringify(response), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
