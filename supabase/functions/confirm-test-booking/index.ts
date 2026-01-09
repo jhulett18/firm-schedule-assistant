@@ -74,8 +74,8 @@ async function writeLog(
 
 // ========== LAWMATICS HELPERS ==========
 
-// Get current Lawmatics user (the one connected to the system)
-async function lawmaticsGetMe(accessToken: string): Promise<{ id: string; email: string } | null> {
+// Get current Lawmatics user (the one connected to the system) with timezone
+async function lawmaticsGetMe(accessToken: string): Promise<{ userId: string | null; timezone: string | null; email: string | null }> {
   try {
     const response = await fetch("https://api.lawmatics.com/v1/users/me", {
       method: "GET",
@@ -87,23 +87,28 @@ async function lawmaticsGetMe(accessToken: string): Promise<{ id: string; email:
     
     if (!response.ok) {
       console.error("[Lawmatics] users/me failed:", response.status);
-      return null;
+      return { userId: null, timezone: null, email: null };
     }
     
     const data = await response.json();
-    // Support JSON:API style (data.id/data.attributes.email) or flat style
+    console.log("[Lawmatics] users/me response:", JSON.stringify(data).slice(0, 500));
+    
+    // Support JSON:API style (data.id/data.attributes.*) or flat style
     const id = data.data?.id || data.id || null;
-    const email = data.data?.attributes?.email || data.email || data.data?.email || null;
+    const attrs = data.data?.attributes || data;
+    const email = attrs.email || null;
+    // Try various timezone field names
+    const timezone = attrs.time_zone || attrs.timezone || attrs.timeZone || null;
     
     if (!id) {
-      console.error("[Lawmatics] users/me: no id found in response", JSON.stringify(data).slice(0, 300));
-      return null;
+      console.error("[Lawmatics] users/me: no id found in response");
+      return { userId: null, timezone: null, email: null };
     }
     
-    return { id: String(id), email: email || "" };
+    return { userId: String(id), timezone, email };
   } catch (err) {
     console.error("[Lawmatics] users/me exception:", err);
-    return null;
+    return { userId: null, timezone: null, email: null };
   }
 }
 
@@ -113,6 +118,11 @@ async function lawmaticsFindOrCreateContact(
   attendeeEmail: string,
   attendeeName?: string
 ): Promise<string | null> {
+  if (!attendeeEmail) {
+    console.log("[Lawmatics] No email provided for contact lookup");
+    return null;
+  }
+  
   console.log("[Lawmatics] Finding or creating contact for:", attendeeEmail);
   
   // Step 1: Try find_by_email endpoint
@@ -204,7 +214,7 @@ async function lawmaticsFindOrCreateContact(
 }
 
 // Read back a Lawmatics event to verify its properties
-async function lawmaticsReadbackEvent(
+async function lawmaticsReadEvent(
   accessToken: string,
   eventId: string
 ): Promise<Record<string, any> | null> {
@@ -223,6 +233,7 @@ async function lawmaticsReadbackEvent(
     }
     
     const data = await response.json();
+    console.log("[Lawmatics] readback response:", JSON.stringify(data).slice(0, 800));
     
     // Support JSON:API style (data.attributes.*) or flat style
     const attrs = data.data?.attributes || data;
@@ -246,6 +257,51 @@ async function lawmaticsReadbackEvent(
     console.error("[Lawmatics] readback exception:", err);
     return null;
   }
+}
+
+// PATCH a Lawmatics event to fix missing fields
+async function lawmaticsPatchEvent(
+  accessToken: string,
+  eventId: string,
+  patchData: Record<string, any>
+): Promise<boolean> {
+  try {
+    console.log("[Lawmatics] PATCHing event:", eventId, JSON.stringify(patchData));
+    
+    const response = await fetch(`https://api.lawmatics.com/v1/events/${eventId}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(patchData),
+    });
+    
+    const responseText = await response.text();
+    console.log("[Lawmatics] PATCH response:", response.status, responseText.slice(0, 300));
+    
+    return response.ok;
+  } catch (err) {
+    console.error("[Lawmatics] PATCH exception:", err);
+    return false;
+  }
+}
+
+// Check if a readback is missing critical time/user fields
+function isReadbackInvalid(readback: Record<string, any> | null): boolean {
+  if (!readback) return true;
+  
+  // Must have either (start_time) or (starts_at) for the event to show up
+  const hasTime = !!(readback.start_time || readback.starts_at);
+  
+  // Ideally should also have user_id for calendar visibility
+  const hasUser = !!readback.user_id;
+  
+  // If missing time, definitely invalid
+  if (!hasTime) return true;
+  
+  // If missing user, we'll flag it but still consider it "mostly valid"
+  return false;
 }
 
 // Helper to refresh Google token
@@ -295,7 +351,7 @@ async function refreshAccessToken(
   }
 }
 
-// Helper to create Lawmatics event with retry logic
+// Helper to create Lawmatics event with proper date/time format and validation
 async function createLawmaticsEvent(
   accessToken: string,
   eventName: string,
@@ -303,25 +359,30 @@ async function createLawmaticsEvent(
   startDatetime: string,
   endDatetime: string,
   timezone: string,
-  eventTypeId?: string | null,
-  locationId?: string | null,
-  lawmaticsUserId?: string | null,
-  lawmaticsContactId?: string | null,
-  supabase?: any,
-  meetingId?: string,
-  runId?: string
-): Promise<{ success: boolean; appointmentId?: string | null; error?: IntegrationError }> {
+  eventTypeId: string | null | undefined,
+  locationId: string | null | undefined,
+  lawmaticsUserId: string | null,
+  lawmaticsContactId: string | null,
+  supabase: any,
+  meetingId: string,
+  runId: string
+): Promise<{ success: boolean; appointmentId?: string | null; readback?: Record<string, any> | null; error?: IntegrationError }> {
   
-  // Calculate date/time parts for fallback
+  // Calculate date/time parts - ALWAYS use these as primary
   const startParts = toLocalDateTimeParts(startDatetime, timezone);
   const endParts = toLocalDateTimeParts(endDatetime, timezone);
   
-  // Attempt 1: Use starts_at/ends_at (ISO format)
+  console.log("[Lawmatics] Timezone used for conversion:", timezone);
+  console.log("[Lawmatics] Converted times - Start:", startParts, "End:", endParts);
+  
+  // ============ ATTEMPT 1: Use start_date/start_time/end_date/end_time (PRIMARY) ============
   const payloadAttempt1: Record<string, any> = {
     name: eventName,
-    starts_at: startDatetime,
-    ends_at: endDatetime,
     description,
+    start_date: startParts.date,  // "YYYY-MM-DD"
+    start_time: startParts.time,  // "HH:mm"
+    end_date: endParts.date,      // "YYYY-MM-DD"
+    end_time: endParts.time,      // "HH:mm"
   };
   
   if (eventTypeId) payloadAttempt1.event_type_id = eventTypeId;
@@ -329,15 +390,19 @@ async function createLawmaticsEvent(
   if (lawmaticsUserId) payloadAttempt1.user_id = lawmaticsUserId;
   if (lawmaticsContactId) payloadAttempt1.contact_id = lawmaticsContactId;
   
-  await writeLog(supabase, meetingId!, runId!, "lawmatics_request_attempt_1", "info", "Attempting Lawmatics create with starts_at/ends_at", {
-    fields: Object.keys(payloadAttempt1),
-    starts_at: startDatetime,
-    ends_at: endDatetime,
-    user_id: lawmaticsUserId,
-    contact_id: lawmaticsContactId,
-  });
+  await writeLog(supabase, meetingId, runId, "lawmatics_create_attempt_1_date_time", "info", 
+    "Attempting Lawmatics create with start_date/start_time format", {
+      fields: Object.keys(payloadAttempt1),
+      start_date: startParts.date,
+      start_time: startParts.time,
+      end_date: endParts.date,
+      end_time: endParts.time,
+      user_id: lawmaticsUserId,
+      contact_id: lawmaticsContactId,
+      timezone_used: timezone,
+    });
   
-  console.log("[Lawmatics] Attempt 1 payload:", JSON.stringify(payloadAttempt1));
+  console.log("[Lawmatics] Attempt 1 payload (date/time):", JSON.stringify(payloadAttempt1));
   
   try {
     const response1 = await fetch("https://api.lawmatics.com/v1/events", {
@@ -361,20 +426,87 @@ async function createLawmaticsEvent(
       }
       const appointmentId = responseData.data?.id || responseData.id || null;
       
-      await writeLog(supabase, meetingId!, runId!, "lawmatics_success", "success", "Lawmatics event created (attempt 1)", {
-        appointmentId,
+      if (appointmentId) {
+        // Validate by reading back
+        await writeLog(supabase, meetingId, runId, "lawmatics_readback_start", "info", "Reading back Lawmatics event to validate...");
+        const readback = await lawmaticsReadEvent(accessToken, appointmentId);
+        
+        if (readback) {
+          await writeLog(supabase, meetingId, runId, "lawmatics_readback", "info", "Lawmatics readback complete", readback);
+          
+          // Check if readback is missing critical fields
+          if (isReadbackInvalid(readback)) {
+            await writeLog(supabase, meetingId, runId, "lawmatics_readback_invalid", "warn", 
+              "Created event is missing time fields, attempting PATCH fix", {
+                readback,
+                expected_start_time: startParts.time,
+                expected_user_id: lawmaticsUserId,
+              });
+            
+            // Try to PATCH the event with correct data
+            const patchData: Record<string, any> = {
+              start_date: startParts.date,
+              start_time: startParts.time,
+              end_date: endParts.date,
+              end_time: endParts.time,
+            };
+            if (lawmaticsUserId && !readback.user_id) patchData.user_id = lawmaticsUserId;
+            if (lawmaticsContactId && !readback.contact_id) patchData.contact_id = lawmaticsContactId;
+            
+            const patchSuccess = await lawmaticsPatchEvent(accessToken, appointmentId, patchData);
+            
+            if (patchSuccess) {
+              await writeLog(supabase, meetingId, runId, "lawmatics_patch_fix", "success", "PATCH fix applied successfully");
+              
+              // Read back again after patch
+              const finalReadback = await lawmaticsReadEvent(accessToken, appointmentId);
+              await writeLog(supabase, meetingId, runId, "lawmatics_final_readback", "info", "Final readback after PATCH", finalReadback || {});
+              
+              if (!isReadbackInvalid(finalReadback)) {
+                await writeLog(supabase, meetingId, runId, "lawmatics_final_success", "success", "Lawmatics event created and validated", {
+                  appointmentId,
+                  user_id: finalReadback?.user_id,
+                  contact_id: finalReadback?.contact_id,
+                  start_time: finalReadback?.start_time,
+                });
+                return { success: true, appointmentId, readback: finalReadback };
+              } else {
+                await writeLog(supabase, meetingId, runId, "lawmatics_patch_incomplete", "warn", 
+                  "PATCH applied but event still missing fields", { finalReadback });
+                // Still return success but with warning in readback
+                return { success: true, appointmentId, readback: finalReadback };
+              }
+            } else {
+              await writeLog(supabase, meetingId, runId, "lawmatics_patch_failed", "warn", "PATCH fix failed, event may be incomplete");
+            }
+          }
+          
+          // Readback is valid
+          await writeLog(supabase, meetingId, runId, "lawmatics_final_success", "success", "Lawmatics event created successfully", {
+            appointmentId,
+            user_id: readback.user_id,
+            contact_id: readback.contact_id,
+            start_time: readback.start_time || readback.starts_at,
+          });
+          return { success: true, appointmentId, readback };
+        } else {
+          await writeLog(supabase, meetingId, runId, "lawmatics_readback_failed", "warn", "Could not read back Lawmatics event");
+          return { success: true, appointmentId, readback: null };
+        }
+      }
+      
+      await writeLog(supabase, meetingId, runId, "lawmatics_success_no_id", "warn", "Lawmatics returned OK but no appointment ID", {
         status: response1.status,
       });
-      
-      return { success: true, appointmentId };
+      return { success: true, appointmentId: null, readback: null };
     }
     
-    // Check if we should retry with date/time format
-    const shouldRetry = response1.status === 422 && 
-      (responseText1.includes("start_date") || responseText1.includes("start_time"));
+    // ============ ATTEMPT 2: Use starts_at/ends_at (ISO format fallback) ============
+    // Only try this if attempt 1 failed with 422/400
+    const shouldRetry = response1.status === 422 || response1.status === 400;
     
     if (!shouldRetry) {
-      await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics API error (attempt 1)", {
+      await writeLog(supabase, meetingId, runId, "lawmatics_error", "error", "Lawmatics API error (attempt 1)", {
         status: response1.status,
         error: responseText1.slice(0, 300),
       });
@@ -390,24 +522,19 @@ async function createLawmaticsEvent(
       };
     }
     
-    // Attempt 2: Use start_date/start_time/end_date/end_time
-    await writeLog(supabase, meetingId!, runId!, "lawmatics_request_attempt_2", "info", "Retrying with start_date/start_time format", {
-      start_date: startParts.date,
-      start_time: startParts.time,
-      end_date: endParts.date,
-      end_time: endParts.time,
-      timezone,
-      user_id: lawmaticsUserId,
-      contact_id: lawmaticsContactId,
-    });
+    await writeLog(supabase, meetingId, runId, "lawmatics_create_attempt_2_iso", "info", 
+      "Retrying with starts_at/ends_at ISO format", {
+        starts_at: startDatetime,
+        ends_at: endDatetime,
+        user_id: lawmaticsUserId,
+        contact_id: lawmaticsContactId,
+      });
     
     const payloadAttempt2: Record<string, any> = {
       name: eventName,
       description,
-      start_date: startParts.date,
-      start_time: startParts.time,
-      end_date: endParts.date,
-      end_time: endParts.time,
+      starts_at: startDatetime,
+      ends_at: endDatetime,
     };
     
     if (eventTypeId) payloadAttempt2.event_type_id = eventTypeId;
@@ -415,7 +542,7 @@ async function createLawmaticsEvent(
     if (lawmaticsUserId) payloadAttempt2.user_id = lawmaticsUserId;
     if (lawmaticsContactId) payloadAttempt2.contact_id = lawmaticsContactId;
     
-    console.log("[Lawmatics] Attempt 2 payload:", JSON.stringify(payloadAttempt2));
+    console.log("[Lawmatics] Attempt 2 payload (ISO):", JSON.stringify(payloadAttempt2));
     
     const response2 = await fetch("https://api.lawmatics.com/v1/events", {
       method: "POST",
@@ -438,15 +565,43 @@ async function createLawmaticsEvent(
       }
       const appointmentId = responseData.data?.id || responseData.id || null;
       
-      await writeLog(supabase, meetingId!, runId!, "lawmatics_success", "success", "Lawmatics event created (attempt 2)", {
-        appointmentId,
-        status: response2.status,
-      });
+      if (appointmentId) {
+        // Validate by reading back
+        const readback = await lawmaticsReadEvent(accessToken, appointmentId);
+        await writeLog(supabase, meetingId, runId, "lawmatics_readback", "info", "Lawmatics readback (attempt 2)", readback || {});
+        
+        // Even if ISO worked, check if we need to patch
+        if (isReadbackInvalid(readback)) {
+          const patchData: Record<string, any> = {
+            start_date: startParts.date,
+            start_time: startParts.time,
+            end_date: endParts.date,
+            end_time: endParts.time,
+          };
+          if (lawmaticsUserId && !readback?.user_id) patchData.user_id = lawmaticsUserId;
+          if (lawmaticsContactId && !readback?.contact_id) patchData.contact_id = lawmaticsContactId;
+          
+          const patchSuccess = await lawmaticsPatchEvent(accessToken, appointmentId, patchData);
+          if (patchSuccess) {
+            const finalReadback = await lawmaticsReadEvent(accessToken, appointmentId);
+            await writeLog(supabase, meetingId, runId, "lawmatics_final_success", "success", 
+              "Lawmatics event created (attempt 2) and patched", { appointmentId, finalReadback });
+            return { success: true, appointmentId, readback: finalReadback };
+          }
+        }
+        
+        await writeLog(supabase, meetingId, runId, "lawmatics_success", "success", "Lawmatics event created (attempt 2)", {
+          appointmentId,
+          status: response2.status,
+        });
+        
+        return { success: true, appointmentId, readback };
+      }
       
-      return { success: true, appointmentId };
+      return { success: true, appointmentId: null, readback: null };
     }
     
-    await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics API error (attempt 2)", {
+    await writeLog(supabase, meetingId, runId, "lawmatics_error", "error", "Lawmatics API error (attempt 2)", {
       status: response2.status,
       error: responseText2.slice(0, 300),
     });
@@ -463,7 +618,7 @@ async function createLawmaticsEvent(
     
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics request failed", { error: errorMessage });
+    await writeLog(supabase, meetingId, runId, "lawmatics_error", "error", "Lawmatics request failed", { error: errorMessage });
     
     return {
       success: false,
@@ -545,7 +700,7 @@ serve(async (req) => {
     const isTest = preferences.is_test === true;
     const adminCalendarId = preferences.admin_calendar_id;
     const sendInvites = preferences.send_invites === true;
-    const timezone = meeting.timezone || "America/New_York";
+    const meetingTimezone = meeting.timezone || "America/New_York";
 
     if (!isTest) {
       await writeLog(supabase, meetingId, runId, "error", "error", "Not a test booking");
@@ -611,24 +766,34 @@ serve(async (req) => {
       const lawmaticsAccessToken = lawmaticsConnection.access_token;
       const client = meeting.external_attendees?.[0] as { name?: string; email?: string } | undefined;
       
-      // Step 1: Get Lawmatics user_id (the connected user who will own the appointment)
+      // Step 1: Get Lawmatics user_id AND timezone
       await writeLog(supabase, meetingId, runId, "lawmatics_me_start", "info", "Fetching Lawmatics user (users/me)...");
       const meResult = await lawmaticsGetMe(lawmaticsAccessToken);
-      let lawmaticsUserId: string | null = null;
+      const lawmaticsUserId = meResult.userId;
+      const lawmaticsUserTimezone = meResult.timezone;
       
-      if (meResult) {
-        lawmaticsUserId = meResult.id;
+      if (lawmaticsUserId) {
         await writeLog(supabase, meetingId, runId, "lawmatics_me_fetched", "success", "Lawmatics user fetched", {
           lawmatics_user_id: lawmaticsUserId,
           lawmatics_user_email: meResult.email,
+          lawmatics_user_timezone: lawmaticsUserTimezone,
         });
       } else {
         await writeLog(supabase, meetingId, runId, "lawmatics_me_failed", "warn", "Could not fetch Lawmatics user - appointment may not be assigned");
       }
       
+      // Determine which timezone to use for Lawmatics date/time conversion
+      // Priority: Lawmatics user timezone > meeting timezone > default
+      const effectiveTimezone = lawmaticsUserTimezone || meetingTimezone || "America/New_York";
+      await writeLog(supabase, meetingId, runId, "lawmatics_timezone", "info", "Using timezone for Lawmatics", {
+        effective: effectiveTimezone,
+        lawmatics_user_tz: lawmaticsUserTimezone,
+        meeting_tz: meetingTimezone,
+      });
+      
       // Step 2: Find or create contact for the attendee
       const attendeeEmail = client?.email || hostAttorney?.email || "";
-      const attendeeName = client?.name || "";
+      const attendeeName = client?.name || hostAttorney?.name || "";
       let lawmaticsContactId: string | null = null;
       
       if (attendeeEmail) {
@@ -651,6 +816,14 @@ serve(async (req) => {
         await writeLog(supabase, meetingId, runId, "lawmatics_contact_skip", "warn", "No attendee email - skipping contact lookup");
       }
       
+      // Log if mapping IDs are missing
+      if (!meeting.meeting_types?.lawmatics_event_type_id) {
+        await writeLog(supabase, meetingId, runId, "lawmatics_mapping_warn", "warn", "No lawmatics_event_type_id mapped for this meeting type");
+      }
+      if (meeting.location_mode === "InPerson" && !meeting.rooms?.lawmatics_location_id) {
+        await writeLog(supabase, meetingId, runId, "lawmatics_mapping_warn", "warn", "No lawmatics_location_id mapped for this room");
+      }
+      
       // Step 3: Create the event with user_id and contact_id
       const eventName = `[TEST] ${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
 
@@ -669,7 +842,7 @@ serve(async (req) => {
         descriptionParts,
         startDatetime,
         endDatetime,
-        timezone,
+        effectiveTimezone,
         meeting.meeting_types?.lawmatics_event_type_id,
         meeting.location_mode === "InPerson" ? meeting.rooms?.lawmatics_location_id : null,
         lawmaticsUserId,
@@ -681,18 +854,7 @@ serve(async (req) => {
 
       if (lawmaticsResult.success) {
         lawmaticsAppointmentId = lawmaticsResult.appointmentId || null;
-        
-        // Step 4: Readback the created event to verify it's linked correctly
-        if (lawmaticsAppointmentId) {
-          await writeLog(supabase, meetingId, runId, "lawmatics_readback_start", "info", "Reading back Lawmatics event...");
-          lawmaticsReadback = await lawmaticsReadbackEvent(lawmaticsAccessToken, lawmaticsAppointmentId);
-          
-          if (lawmaticsReadback) {
-            await writeLog(supabase, meetingId, runId, "lawmatics_readback", "success", "Lawmatics event readback complete", lawmaticsReadback);
-          } else {
-            await writeLog(supabase, meetingId, runId, "lawmatics_readback_failed", "warn", "Could not read back Lawmatics event");
-          }
-        }
+        lawmaticsReadback = lawmaticsResult.readback || null;
       } else if (lawmaticsResult.error) {
         errors.push(lawmaticsResult.error);
       }
@@ -742,8 +904,8 @@ serve(async (req) => {
         const eventBody = {
           summary: eventSummary,
           description: `⚠️ TEST BOOKING - Created from Admin Test My Booking\n\nMeeting Type: ${meeting.meeting_types?.name || "Meeting"}\nRoom: ${meeting.rooms?.name || "N/A"}`,
-          start: { dateTime: startDatetime, timeZone: timezone },
-          end: { dateTime: endDatetime, timeZone: timezone },
+          start: { dateTime: startDatetime, timeZone: meetingTimezone },
+          end: { dateTime: endDatetime, timeZone: meetingTimezone },
           attendees,
         };
 
@@ -810,17 +972,23 @@ serve(async (req) => {
         .eq("id", meetingId);
     }
 
+    // Determine if Lawmatics result is actually valid
+    const lawmaticsIsValid = lawmaticsReadback && 
+      (lawmaticsReadback.start_time || lawmaticsReadback.starts_at) && 
+      lawmaticsReadback.user_id;
+    
     // Log completion
-    const hasErrors = errors.length > 0;
+    const hasErrors = errors.length > 0 || (lawmaticsAppointmentId && !lawmaticsIsValid);
     await writeLog(
       supabase,
       meetingId,
       runId,
       "done",
       hasErrors ? "warn" : "success",
-      hasErrors ? "Test booking completed with some errors" : "Test booking completed successfully",
+      hasErrors ? "Test booking completed with some warnings" : "Test booking completed successfully",
       {
         lawmaticsAppointmentId,
+        lawmaticsIsValid,
         googleEventId,
         errors,
       }
@@ -849,6 +1017,7 @@ serve(async (req) => {
         meetingId,
         lawmaticsAppointmentId,
         lawmaticsReadback,
+        lawmaticsIsValid,
         googleEventId,
         hasErrors,
         errors,

@@ -1302,12 +1302,12 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
             <div className="space-y-4 py-4">
               {/* Header with appropriate icon */}
               <div className="text-center py-4">
-                {bookingResult?.hasErrors || !bookingResult?.lawmaticsAppointmentId ? (
+                {bookingResult?.hasErrors || !bookingResult?.lawmaticsAppointmentId || bookingResult?.lawmaticsIsValid === false ? (
                   <>
                     <AlertCircle className="h-12 w-12 mx-auto text-yellow-500 mb-4" />
                     <h3 className="text-lg font-semibold">Test Booking Completed with Warnings</h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Some integrations failed. See details below.
+                      Some integrations may have issues. See details below.
                     </p>
                   </>
                 ) : (
@@ -1322,7 +1322,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
               </div>
               
               {bookingResult && (
-                <Card className={bookingResult.hasErrors || !bookingResult.lawmaticsAppointmentId ? "border-yellow-500" : ""}>
+                <Card className={bookingResult.hasErrors || !bookingResult.lawmaticsAppointmentId || bookingResult.lawmaticsIsValid === false ? "border-yellow-500" : ""}>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm">Integration Results</CardTitle>
                   </CardHeader>
@@ -1347,20 +1347,37 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                     
                     {/* Lawmatics Status */}
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        {bookingResult.lawmaticsAppointmentId ? (
-                          <>
-                            <CheckCircle className="h-4 w-4 text-green-500" />
-                            <span className="font-medium">Lawmatics:</span>
-                            <span className="text-green-600">Created</span>
-                            <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
-                          </>
-                        ) : (
-                          <>
-                            <XCircle className="h-4 w-4 text-destructive" />
-                            <span className="font-medium">Lawmatics:</span>
-                            <span className="text-destructive">Failed</span>
-                          </>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          {bookingResult.lawmaticsAppointmentId ? (
+                            bookingResult.lawmaticsIsValid ? (
+                              <>
+                                <CheckCircle className="h-4 w-4 text-green-500" />
+                                <span className="font-medium">Lawmatics:</span>
+                                <span className="text-green-600">Created</span>
+                                <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
+                              </>
+                            ) : (
+                              <>
+                                <AlertCircle className="h-4 w-4 text-yellow-500" />
+                                <span className="font-medium">Lawmatics:</span>
+                                <span className="text-yellow-600">Created (incomplete)</span>
+                                <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
+                              </>
+                            )
+                          ) : (
+                            <>
+                              <XCircle className="h-4 w-4 text-destructive" />
+                              <span className="font-medium">Lawmatics:</span>
+                              <span className="text-destructive">Failed</span>
+                            </>
+                          )}
+                        </div>
+                        {/* Warning if created but invalid */}
+                        {bookingResult.lawmaticsAppointmentId && bookingResult.lawmaticsIsValid === false && (
+                          <p className="text-xs text-yellow-600 ml-6">
+                            ⚠️ Event created but may be missing time/user assignment. Check readback below.
+                          </p>
                         )}
                       </div>
                       
