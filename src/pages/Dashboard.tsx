@@ -15,7 +15,7 @@ import { useAuth } from "@/contexts/AuthContext";
 export default function Dashboard() {
   const { userRole } = useAuth();
   const [showTestWizard, setShowTestWizard] = useState(false);
-  const isAdmin = userRole === "Admin";
+  const isAdmin = userRole === "admin";
   
   const {
     systemStatus,
