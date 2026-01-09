@@ -824,6 +824,7 @@ serve(async (req) => {
     let lawmaticsAppointmentId: string | null = null;
     let lawmaticsReadback: Record<string, any> | null = null;
     let lawmaticsComplete = false;
+    let lawmaticsDebug: any = null;
 
     await writeLog(supabase, meetingId, runId, "lawmatics_start", "info", "Checking Lawmatics connection...");
 
