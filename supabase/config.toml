@@ -59,3 +59,12 @@ verify_jwt = false
 
 [functions.lawmatics-disconnect]
 verify_jwt = false
+
+[functions.create-test-booking-request]
+verify_jwt = false
+
+[functions.test-booking-available-slots]
+verify_jwt = false
+
+[functions.confirm-test-booking]
+verify_jwt = false

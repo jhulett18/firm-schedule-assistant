@@ -80,6 +80,47 @@ export type Database = {
           },
         ]
       }
+      booking_progress_logs: {
+        Row: {
+          created_at: string
+          details_json: Json | null
+          id: string
+          level: string
+          meeting_id: string | null
+          message: string
+          run_id: string
+          step: string
+        }
+        Insert: {
+          created_at?: string
+          details_json?: Json | null
+          id?: string
+          level?: string
+          meeting_id?: string | null
+          message: string
+          run_id: string
+          step: string
+        }
+        Update: {
+          created_at?: string
+          details_json?: Json | null
+          id?: string
+          level?: string
+          meeting_id?: string | null
+          message?: string
+          run_id?: string
+          step?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "booking_progress_logs_meeting_id_fkey"
+            columns: ["meeting_id"]
+            isOneToOne: false
+            referencedRelation: "meetings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       booking_requests: {
         Row: {
           created_at: string
