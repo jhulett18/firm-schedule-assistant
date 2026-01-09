@@ -1344,7 +1344,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                         </>
                       )}
                     </div>
-                    
+
                     {/* Lawmatics Status */}
                     <div className="space-y-2">
                       <div className="flex flex-col gap-1">
@@ -1373,30 +1373,45 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                             </>
                           )}
                         </div>
-                        {/* Warning if created but invalid */}
+
                         {bookingResult.lawmaticsAppointmentId && bookingResult.lawmaticsIsValid === false && (
                           <p className="text-xs text-yellow-600 ml-6">
-                            ⚠️ Event created but may be missing time/user assignment. Check readback below.
+                            Missing: {(bookingResult.lawmatics?.missingFields || []).join(", ") || "(unknown)"}
                           </p>
                         )}
                       </div>
-                      
+
+                      {/* Payload we attempted (computed times) */}
+                      {bookingResult.lawmatics?.payloadComputed && (
+                        <details className="mt-2 text-xs">
+                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                            View Lawmatics Payload (computed)
+                          </summary>
+                          <div className="mt-2 p-3 bg-muted rounded-lg">
+                            <pre className="overflow-x-auto whitespace-pre-wrap break-words">
+{JSON.stringify(bookingResult.lawmatics.payloadComputed, null, 2)}
+                            </pre>
+                          </div>
+                        </details>
+                      )}
+
                       {/* Lawmatics Readback Panel */}
-                      {bookingResult.lawmaticsReadback && (
+                      {(bookingResult.lawmaticsReadback || bookingResult.lawmatics?.readback) && (
                         <details className="mt-2 text-xs">
                           <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                             View Lawmatics Readback (verified data)
                           </summary>
                           <div className="mt-2 p-3 bg-muted rounded-lg">
                             <pre className="overflow-x-auto whitespace-pre-wrap break-words">
-{JSON.stringify(bookingResult.lawmaticsReadback, null, 2)}
+{JSON.stringify(bookingResult.lawmaticsReadback || bookingResult.lawmatics?.readback, null, 2)}
                             </pre>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               className="mt-2"
                               onClick={async () => {
-                                const success = await copyToClipboard(JSON.stringify(bookingResult.lawmaticsReadback, null, 2));
+                                const rb = bookingResult.lawmaticsReadback || bookingResult.lawmatics?.readback;
+                                const success = await copyToClipboard(JSON.stringify(rb, null, 2));
                                 if (success) toast.success("Lawmatics readback copied");
                               }}
                             >
@@ -1406,7 +1421,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                         </details>
                       )}
                     </div>
-                    
+                  
                     {/* Error Details */}
                     {bookingResult.errors?.length > 0 && (
                       <div className="mt-3 p-3 bg-destructive/10 rounded-lg space-y-2">
@@ -1422,9 +1437,9 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                             )}
                           </div>
                         ))}
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           className="mt-2"
                           onClick={async () => {
                             const success = await copyToClipboard(JSON.stringify(bookingResult.errors, null, 2));
