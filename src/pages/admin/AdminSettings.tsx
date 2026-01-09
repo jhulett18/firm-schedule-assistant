@@ -13,13 +13,18 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download, Unlink } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download, Unlink, ExternalLink } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface LawmaticsItem {
   id: string;
   name: string;
 }
+
+// Helper to check if a name is a fallback (Appointment Type <id>)
+const isFallbackName = (name: string, id: string) => {
+  return name === `Appointment Type ${id}` || name === `Event Type ${id}`;
+};
 
 const AdminSettings = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -822,7 +827,21 @@ const AdminSettings = () => {
                                     <SelectItem value="none">— None —</SelectItem>
                                     {lawmaticsEventTypes.map((et) => (
                                       <SelectItem key={et.id} value={et.id}>
-                                        {et.name}
+                                        <span className="flex items-center gap-2">
+                                          {et.name}
+                                          {isFallbackName(et.name, et.id) && (
+                                            <a
+                                              href={`https://app.lawmatics.com/settings/appointments-events/appointment-types/${et.id}/edit`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={(e) => e.stopPropagation()}
+                                              className="text-muted-foreground hover:text-foreground"
+                                              title="Open in Lawmatics"
+                                            >
+                                              <ExternalLink className="h-3 w-3" />
+                                            </a>
+                                          )}
+                                        </span>
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
