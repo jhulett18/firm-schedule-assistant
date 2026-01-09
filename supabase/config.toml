@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.confirm-test-booking]
 verify_jwt = false
+
+[functions.lawmatics-list-users]
+verify_jwt = false
