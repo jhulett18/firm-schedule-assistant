@@ -710,17 +710,38 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
         throw { message: data?.error?.message || data?.error || "Booking failed", status: data?.error?.status };
       }
       
-      appendLog('success', `${confirmFnName} success after ${ms}ms`, { 
-        lawmaticsAppointmentId: data?.lawmaticsAppointmentId,
-        googleEventId: data?.googleEventId,
-        hasErrors: data?.hasErrors,
-        keys: data ? Object.keys(data) : []
-      });
+      // Check for partial success (hasErrors or missing IDs)
+      const hasWarnings = data?.hasErrors === true || !data?.lawmaticsAppointmentId;
+      
+      if (hasWarnings) {
+        appendLog('warn', `${confirmFnName} completed with warnings after ${ms}ms`, { 
+          lawmaticsAppointmentId: data?.lawmaticsAppointmentId,
+          googleEventId: data?.googleEventId,
+          hasErrors: data?.hasErrors,
+          errors: data?.errors,
+        });
+      } else {
+        appendLog('success', `${confirmFnName} success after ${ms}ms`, { 
+          lawmaticsAppointmentId: data?.lawmaticsAppointmentId,
+          googleEventId: data?.googleEventId,
+          keys: data ? Object.keys(data) : []
+        });
+      }
       
       // If edge returns debugSteps, append them
       if (data?.debugSteps?.length) {
         for (const step of data.debugSteps) {
           appendLog(step.level || 'info', `[${confirmFnName}] ${step.message}`, step.details || step);
+        }
+      }
+      
+      // Log individual integration errors
+      if (data?.errors?.length) {
+        for (const err of data.errors) {
+          appendLog('error', `${err.system} failed: ${err.message}`, { 
+            status: err.status, 
+            responseExcerpt: err.responseExcerpt 
+          });
         }
       }
       
@@ -730,7 +751,7 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
       setCurrentStep("done");
       updateDebug({
         currentState: "success",
-        lastAction: "Booking confirmed",
+        lastAction: hasWarnings ? "Booking completed with warnings" : "Booking confirmed",
         debugData: { ...debugInfo.debugData, bookingResult: data },
       });
       
@@ -1279,28 +1300,96 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
           {/* Step 6: Done */}
           {currentStep === "done" && (
             <div className="space-y-4 py-4">
+              {/* Header with appropriate icon */}
               <div className="text-center py-4">
-                <CheckCircle className="h-12 w-12 mx-auto text-green-500 mb-4" />
-                <h3 className="text-lg font-semibold">Test Booking Complete!</h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Check your Lawmatics and Google Calendar for the [TEST] marked entries.
-                </p>
+                {bookingResult?.hasErrors || !bookingResult?.lawmaticsAppointmentId ? (
+                  <>
+                    <AlertCircle className="h-12 w-12 mx-auto text-yellow-500 mb-4" />
+                    <h3 className="text-lg font-semibold">Test Booking Completed with Warnings</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Some integrations failed. See details below.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="h-12 w-12 mx-auto text-green-500 mb-4" />
+                    <h3 className="text-lg font-semibold">Test Booking Complete!</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Check your Lawmatics and Google Calendar for the [TEST] marked entries.
+                    </p>
+                  </>
+                )}
               </div>
               
               {bookingResult && (
-                <Card>
+                <Card className={bookingResult.hasErrors || !bookingResult.lawmaticsAppointmentId ? "border-yellow-500" : ""}>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Results</CardTitle>
+                    <CardTitle className="text-sm">Integration Results</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-sm space-y-1">
-                    {bookingResult.lawmaticsAppointmentId && (
-                      <p><strong>Lawmatics ID:</strong> {bookingResult.lawmaticsAppointmentId}</p>
-                    )}
-                    {bookingResult.googleEventId && (
-                      <p><strong>Google Event ID:</strong> {bookingResult.googleEventId}</p>
-                    )}
-                    {bookingResult.hasErrors && (
-                      <p className="text-yellow-600">Some steps completed with warnings. Check logs above.</p>
+                  <CardContent className="text-sm space-y-3">
+                    {/* Google Calendar Status */}
+                    <div className="flex items-center gap-2">
+                      {bookingResult.googleEventId ? (
+                        <>
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                          <span className="font-medium">Google Calendar:</span>
+                          <span className="text-green-600">Created</span>
+                          <span className="text-muted-foreground text-xs">({bookingResult.googleEventId})</span>
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 text-destructive" />
+                          <span className="font-medium">Google Calendar:</span>
+                          <span className="text-destructive">Failed</span>
+                        </>
+                      )}
+                    </div>
+                    
+                    {/* Lawmatics Status */}
+                    <div className="flex items-center gap-2">
+                      {bookingResult.lawmaticsAppointmentId ? (
+                        <>
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                          <span className="font-medium">Lawmatics:</span>
+                          <span className="text-green-600">Created</span>
+                          <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 text-destructive" />
+                          <span className="font-medium">Lawmatics:</span>
+                          <span className="text-destructive">Failed</span>
+                        </>
+                      )}
+                    </div>
+                    
+                    {/* Error Details */}
+                    {bookingResult.errors?.length > 0 && (
+                      <div className="mt-3 p-3 bg-destructive/10 rounded-lg space-y-2">
+                        <p className="font-medium text-destructive text-xs">Error Details:</p>
+                        {bookingResult.errors.map((err: any, idx: number) => (
+                          <div key={idx} className="text-xs space-y-1">
+                            <p><strong>{err.system}:</strong> {err.message}</p>
+                            {err.status && <p className="text-muted-foreground">Status: {err.status}</p>}
+                            {err.responseExcerpt && (
+                              <pre className="text-xs bg-muted p-2 rounded overflow-x-auto max-h-20">
+                                {err.responseExcerpt}
+                              </pre>
+                            )}
+                          </div>
+                        ))}
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="mt-2"
+                          onClick={async () => {
+                            const success = await copyToClipboard(JSON.stringify(bookingResult.errors, null, 2));
+                            if (success) toast.success("Error details copied");
+                          }}
+                        >
+                          <Copy className="h-3 w-3 mr-1" /> Copy Error Details
+                        </Button>
+                      </div>
                     )}
                   </CardContent>
                 </Card>

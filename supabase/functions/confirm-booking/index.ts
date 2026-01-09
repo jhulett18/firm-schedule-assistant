@@ -28,6 +28,161 @@ interface MeetingDetails {
   host_attorney?: { name: string; email: string } | null;
 }
 
+// Helper to convert ISO datetime to date/time parts in a given timezone
+function toLocalDateTimeParts(isoDatetime: string, timezone: string): { date: string; time: string } {
+  const date = new Date(isoDatetime);
+  
+  // Get date in YYYY-MM-DD format using en-CA locale (gives ISO format reliably)
+  const dateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  
+  const year = dateParts.find(p => p.type === 'year')?.value || '';
+  const month = dateParts.find(p => p.type === 'month')?.value || '';
+  const day = dateParts.find(p => p.type === 'day')?.value || '';
+  const dateStr = `${year}-${month}-${day}`;
+  
+  // Get time in HH:mm format using en-GB locale with 24h format
+  const timeParts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  
+  const hour = timeParts.find(p => p.type === 'hour')?.value || '00';
+  const minute = timeParts.find(p => p.type === 'minute')?.value || '00';
+  const timeStr = `${hour}:${minute}`;
+  
+  return { date: dateStr, time: timeStr };
+}
+
+// Helper to create Lawmatics event with retry logic
+async function createLawmaticsEvent(
+  accessToken: string,
+  eventName: string,
+  description: string,
+  startDatetime: string,
+  endDatetime: string,
+  timezone: string,
+  eventTypeId?: string | null,
+  locationId?: string | null
+): Promise<{ success: boolean; appointmentId?: string | null; error?: string }> {
+  
+  // Calculate date/time parts for fallback
+  const startParts = toLocalDateTimeParts(startDatetime, timezone);
+  const endParts = toLocalDateTimeParts(endDatetime, timezone);
+  
+  // Attempt 1: Use starts_at/ends_at (ISO format)
+  const payloadAttempt1: Record<string, any> = {
+    name: eventName,
+    starts_at: startDatetime,
+    ends_at: endDatetime,
+    description,
+  };
+  
+  if (eventTypeId) payloadAttempt1.event_type_id = eventTypeId;
+  if (locationId) payloadAttempt1.location_id = locationId;
+  
+  console.log("[Lawmatics] Attempt 1 payload:", JSON.stringify(payloadAttempt1));
+  
+  try {
+    const response1 = await fetch("https://api.lawmatics.com/v1/events", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payloadAttempt1),
+    });
+    
+    const responseText1 = await response1.text();
+    console.log("[Lawmatics] Attempt 1 response:", response1.status, responseText1.slice(0, 500));
+    
+    if (response1.ok) {
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText1);
+      } catch {
+        responseData = {};
+      }
+      const appointmentId = responseData.data?.id || responseData.id || null;
+      console.log("[Lawmatics] Event created successfully (attempt 1), ID:", appointmentId);
+      return { success: true, appointmentId };
+    }
+    
+    // Check if we should retry with date/time format
+    const shouldRetry = response1.status === 422 && 
+      (responseText1.includes("start_date") || responseText1.includes("start_time"));
+    
+    if (!shouldRetry) {
+      console.error("[Lawmatics] API error (attempt 1):", response1.status, responseText1.slice(0, 500));
+      return {
+        success: false,
+        error: `Lawmatics API error: ${response1.status} - ${responseText1.slice(0, 200)}`,
+      };
+    }
+    
+    // Attempt 2: Use start_date/start_time/end_date/end_time
+    console.log("[Lawmatics] Retrying with start_date/start_time format");
+    
+    const payloadAttempt2: Record<string, any> = {
+      name: eventName,
+      description,
+      start_date: startParts.date,
+      start_time: startParts.time,
+      end_date: endParts.date,
+      end_time: endParts.time,
+    };
+    
+    if (eventTypeId) payloadAttempt2.event_type_id = eventTypeId;
+    if (locationId) payloadAttempt2.location_id = locationId;
+    
+    console.log("[Lawmatics] Attempt 2 payload:", JSON.stringify(payloadAttempt2));
+    
+    const response2 = await fetch("https://api.lawmatics.com/v1/events", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payloadAttempt2),
+    });
+    
+    const responseText2 = await response2.text();
+    console.log("[Lawmatics] Attempt 2 response:", response2.status, responseText2.slice(0, 500));
+    
+    if (response2.ok) {
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText2);
+      } catch {
+        responseData = {};
+      }
+      const appointmentId = responseData.data?.id || responseData.id || null;
+      console.log("[Lawmatics] Event created successfully (attempt 2), ID:", appointmentId);
+      return { success: true, appointmentId };
+    }
+    
+    console.error("[Lawmatics] API error (attempt 2):", response2.status, responseText2.slice(0, 500));
+    return {
+      success: false,
+      error: `Lawmatics API error after retry: ${response2.status} - ${responseText2.slice(0, 200)}`,
+    };
+    
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("[Lawmatics] Request failed:", errorMessage);
+    return {
+      success: false,
+      error: `Lawmatics request failed: ${errorMessage}`,
+    };
+  }
+}
+
 // Helper to create/update Google Calendar event with room resource
 async function createGoogleCalendarEventWithRoom(
   supabase: any,
@@ -224,6 +379,8 @@ serve(async (req) => {
       });
     }
 
+    const timezone = meeting.timezone || "America/New_York";
+
     // Fetch room_reservation_mode setting
     const { data: roomReservationSetting } = await supabase
       .from("app_settings")
@@ -271,7 +428,7 @@ serve(async (req) => {
       // Non-fatal, continue
     }
 
-    // 5. Create appointment in Lawmatics via direct API
+    // 5. Create appointment in Lawmatics via direct API with retry logic
     let lawmaticsAppointmentId: string | null = null;
     let lawmaticsError: string | null = null;
 
@@ -284,64 +441,37 @@ serve(async (req) => {
       .maybeSingle();
 
     if (lawmaticsConnection?.access_token) {
-      try {
-        const client = meeting.external_attendees?.[0];
-        const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
-        
-        // Build description with fallback info if mappings not set
-        const descriptionParts = [
-          `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
-          `Duration: ${meeting.duration_minutes} minutes`,
-          `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || meeting.in_person_location_choice || "In Person") : "Zoom"}`,
-          hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
-          client?.name ? `Client: ${client.name}` : null,
-          client?.email ? `Client Email: ${client.email}` : null,
-          client?.phone ? `Client Phone: ${client.phone}` : null,
-        ].filter(Boolean).join("\n");
+      const client = meeting.external_attendees?.[0];
+      const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+      
+      // Build description with fallback info if mappings not set
+      const descriptionParts = [
+        `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
+        `Duration: ${meeting.duration_minutes} minutes`,
+        `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || meeting.in_person_location_choice || "In Person") : "Zoom"}`,
+        hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
+        client?.name ? `Client: ${client.name}` : null,
+        client?.email ? `Client Email: ${client.email}` : null,
+        client?.phone ? `Client Phone: ${client.phone}` : null,
+      ].filter(Boolean).join("\n");
 
-        // Build Lawmatics payload with mappings
-        const lawmaticsPayload: Record<string, any> = {
-          name: eventName,
-          starts_at: startDatetime,
-          ends_at: endDatetime,
-          description: descriptionParts,
-        };
+      const lawmaticsResult = await createLawmaticsEvent(
+        lawmaticsConnection.access_token,
+        eventName,
+        descriptionParts,
+        startDatetime,
+        endDatetime,
+        timezone,
+        meeting.meeting_types?.lawmatics_event_type_id,
+        meeting.location_mode === "InPerson" ? meeting.rooms?.lawmatics_location_id : null
+      );
 
-        // Add event_type_id if mapped
-        if (meeting.meeting_types?.lawmatics_event_type_id) {
-          lawmaticsPayload.event_type_id = meeting.meeting_types.lawmatics_event_type_id;
-          console.log("Using Lawmatics event_type_id:", meeting.meeting_types.lawmatics_event_type_id);
-        }
-
-        // Add location_id if mapped and in-person
-        if (meeting.location_mode === "InPerson" && meeting.rooms?.lawmatics_location_id) {
-          lawmaticsPayload.location_id = meeting.rooms.lawmatics_location_id;
-          console.log("Using Lawmatics location_id:", meeting.rooms.lawmatics_location_id);
-        }
-
-        console.log("Creating Lawmatics event:", JSON.stringify(lawmaticsPayload));
-
-        const lawmaticsResponse = await fetch("https://api.lawmatics.com/v1/events", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${lawmaticsConnection.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(lawmaticsPayload),
-        });
-
-        if (lawmaticsResponse.ok) {
-          const responseData = await lawmaticsResponse.json();
-          lawmaticsAppointmentId = responseData.data?.id || responseData.id || null;
-          console.log("Lawmatics event created, ID:", lawmaticsAppointmentId);
-        } else {
-          const errorText = await lawmaticsResponse.text();
-          lawmaticsError = `Lawmatics API error: ${lawmaticsResponse.status} - ${errorText}`;
-          console.error(lawmaticsError);
-        }
-      } catch (err) {
-        lawmaticsError = `Lawmatics API error: ${err instanceof Error ? err.message : String(err)}`;
-        console.error(lawmaticsError);
+      if (lawmaticsResult.success) {
+        lawmaticsAppointmentId = lawmaticsResult.appointmentId || null;
+        console.log("Lawmatics event created, ID:", lawmaticsAppointmentId);
+      } else {
+        lawmaticsError = lawmaticsResult.error || "Unknown Lawmatics error";
+        console.error("Lawmatics error:", lawmaticsError);
       }
     } else {
       console.log("No Lawmatics connection configured, skipping external integration");
