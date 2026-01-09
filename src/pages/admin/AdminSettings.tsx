@@ -813,39 +813,38 @@ const AdminSettings = () => {
                             <TableCell className="font-medium">{mt.name}</TableCell>
                             <TableCell>
                               {lawmaticsEventTypes.length > 0 ? (
-                                <Select
-                                  value={meetingTypeMappings[mt.id] || "none"}
-                                  onValueChange={(value) => setMeetingTypeMappings(prev => ({
-                                    ...prev,
-                                    [mt.id]: value === "none" ? "" : value
-                                  }))}
-                                >
-                                  <SelectTrigger className="max-w-xs">
-                                    <SelectValue placeholder="Select event type" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="none">— None —</SelectItem>
-                                    {lawmaticsEventTypes.map((et) => (
-                                      <SelectItem key={et.id} value={et.id}>
-                                        <span className="flex items-center gap-2">
+                                <div className="flex items-center gap-2">
+                                  <Select
+                                    value={meetingTypeMappings[mt.id] || "none"}
+                                    onValueChange={(value) => setMeetingTypeMappings(prev => ({
+                                      ...prev,
+                                      [mt.id]: value === "none" ? "" : value
+                                    }))}
+                                  >
+                                    <SelectTrigger className="max-w-xs">
+                                      <SelectValue placeholder="Select event type" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="none">— None —</SelectItem>
+                                      {lawmaticsEventTypes.map((et) => (
+                                        <SelectItem key={et.id} value={et.id}>
                                           {et.name}
-                                          {isFallbackName(et.name, et.id) && (
-                                            <a
-                                              href={`https://app.lawmatics.com/settings/appointments-events/appointment-types/${et.id}/edit`}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              onClick={(e) => e.stopPropagation()}
-                                              className="text-muted-foreground hover:text-foreground"
-                                              title="Open in Lawmatics"
-                                            >
-                                              <ExternalLink className="h-3 w-3" />
-                                            </a>
-                                          )}
-                                        </span>
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {meetingTypeMappings[mt.id] && meetingTypeMappings[mt.id] !== "none" && (
+                                    <a
+                                      href={`https://app.lawmatics.com/settings/appointments-events/appointment-types/${meetingTypeMappings[mt.id]}/edit`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-muted-foreground hover:text-foreground"
+                                      title="Open in Lawmatics"
+                                    >
+                                      <ExternalLink className="h-4 w-4" />
+                                    </a>
+                                  )}
+                                </div>
                               ) : (
                                 <div className="flex items-center gap-2">
                                   <Input
@@ -857,6 +856,17 @@ const AdminSettings = () => {
                                     }))}
                                     className="max-w-xs"
                                   />
+                                  {meetingTypeMappings[mt.id] && (
+                                    <a
+                                      href={`https://app.lawmatics.com/settings/appointments-events/appointment-types/${meetingTypeMappings[mt.id]}/edit`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-muted-foreground hover:text-foreground"
+                                      title="Open in Lawmatics"
+                                    >
+                                      <ExternalLink className="h-4 w-4" />
+                                    </a>
+                                  )}
                                   <span className="text-xs text-muted-foreground">
                                     Click "Load Lawmatics Data" for dropdown
                                   </span>
