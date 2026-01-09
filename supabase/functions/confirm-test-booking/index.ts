@@ -101,45 +101,52 @@ async function writeLog(
 }
 
 // Convert ISO datetime to local date/time parts
-function toLocalDateTimeParts(isoDatetime: string, timezone: string): { date: string; time: string; time12: string } {
-  const date = new Date(isoDatetime);
-  
-  const dateParts = new Intl.DateTimeFormat('en-CA', {
+function toLocalDateTimeParts(
+  isoDatetime: string,
+  timezone: string
+): { date: string; time: string; timeSeconds: string; time12: string } {
+  const d = new Date(isoDatetime);
+
+  // Date-only: YYYY-MM-DD (no timestamp)
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  
-  const year = dateParts.find(p => p.type === 'year')?.value || '';
-  const month = dateParts.find(p => p.type === 'month')?.value || '';
-  const day = dateParts.find(p => p.type === 'day')?.value || '';
-  const dateStr = `${year}-${month}-${day}`;
-  
-  const timeParts = new Intl.DateTimeFormat('en-GB', {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const year = dateParts.find((p) => p.type === "year")?.value || "";
+  const month = dateParts.find((p) => p.type === "month")?.value || "";
+  const day = dateParts.find((p) => p.type === "day")?.value || "";
+  const dateStr = `${year}-${month}-${day}`.slice(0, 10);
+
+  // Time: HH:mm (24h)
+  const timeParts = new Intl.DateTimeFormat("en-GB", {
     timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
+    hour: "2-digit",
+    minute: "2-digit",
     hour12: false,
-  }).formatToParts(date);
-  
-  const hour = timeParts.find(p => p.type === 'hour')?.value || '00';
-  const minute = timeParts.find(p => p.type === 'minute')?.value || '00';
-  const time24 = `${hour}:${minute}`;
-  
-  const time12Parts = new Intl.DateTimeFormat('en-US', {
+  }).formatToParts(d);
+
+  const hour = timeParts.find((p) => p.type === "hour")?.value || "00";
+  const minute = timeParts.find((p) => p.type === "minute")?.value || "00";
+  const time = `${hour}:${minute}`;
+  const timeSeconds = `${hour}:${minute}:00`;
+
+  // 12-hour format fallback
+  const time12Parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
-    hour: 'numeric',
-    minute: '2-digit',
+    hour: "numeric",
+    minute: "2-digit",
     hour12: true,
-  }).formatToParts(date);
-  
-  const hour12 = time12Parts.find(p => p.type === 'hour')?.value || '12';
-  const minute12 = time12Parts.find(p => p.type === 'minute')?.value || '00';
-  const dayPeriod = time12Parts.find(p => p.type === 'dayPeriod')?.value || 'AM';
-  const time12Str = `${hour12}:${minute12} ${dayPeriod.toUpperCase()}`;
-  
-  return { date: dateStr, time: time24, time12: time12Str };
+  }).formatToParts(d);
+
+  const hour12 = time12Parts.find((p) => p.type === "hour")?.value || "12";
+  const minute12 = time12Parts.find((p) => p.type === "minute")?.value || "00";
+  const dayPeriod = time12Parts.find((p) => p.type === "dayPeriod")?.value || "AM";
+  const time12 = `${hour12}:${minute12} ${dayPeriod.toUpperCase()}`;
+
+  return { date: dateStr, time, timeSeconds, time12 };
 }
 
 // ========== LAWMATICS USER RESOLUTION ==========
@@ -442,94 +449,138 @@ async function createLawmaticsAppointment(
   runId: string
 ): Promise<CreateAppointmentResult> {
   const attempts: Array<{ step: string; status: number; ok: boolean; note?: string }> = [];
-  
+
   const startParts = toLocalDateTimeParts(opts.startDatetime, opts.timezone);
   const endParts = toLocalDateTimeParts(opts.endDatetime, opts.timezone);
-  
-  // Build canonical payload with IDs as NUMBERS
+
+  // Primary payload uses HH:mm
   const canonical: Record<string, any> = {
     name: opts.name,
     description: opts.description,
     all_day: false,
+    is_all_day: false,
+
+    // ISO timestamps
     starts_at: opts.startDatetime,
     ends_at: opts.endDatetime,
-    start_date: startParts.date,
-    start_time: startParts.time,
+
+    // Defensive date/time parts
+    start_date: startParts.date, // YYYY-MM-DD
+    start_time: startParts.time, // HH:mm
     end_date: endParts.date,
     end_time: endParts.time,
   };
-  
+
+  // Fallback payload uses HH:mm:ss
+  const canonicalSeconds = {
+    ...canonical,
+    start_time: startParts.timeSeconds,
+    end_time: endParts.timeSeconds,
+  };
+
   // Add IDs as NUMBERS (critical!)
-  if (opts.eventTypeId) canonical.event_type_id = opts.eventTypeId;
-  if (opts.locationId) canonical.location_id = opts.locationId;
+  if (opts.eventTypeId) canonical.event_type_id = parseInt(String(opts.eventTypeId), 10);
+  if (opts.locationId) canonical.location_id = parseInt(String(opts.locationId), 10);
   if (opts.userId) {
-    canonical.user_id = opts.userId;
-    canonical.user_ids = [opts.userId];
+    canonical.user_id = parseInt(String(opts.userId), 10);
+    canonical.user_ids = [parseInt(String(opts.userId), 10)];
   }
   if (opts.contactId) {
-    canonical.contact_id = opts.contactId;
+    canonical.contact_id = parseInt(String(opts.contactId), 10);
     canonical.eventable_type = "Contact";
-    canonical.eventable_id = opts.contactId;
+    canonical.eventable_id = parseInt(String(opts.contactId), 10);
   }
-  
+
+  // Mirror IDs to seconds payload
+  if (canonical.event_type_id) canonicalSeconds.event_type_id = canonical.event_type_id;
+  if (canonical.location_id) canonicalSeconds.location_id = canonical.location_id;
+  if (canonical.user_id) {
+    canonicalSeconds.user_id = canonical.user_id;
+    canonicalSeconds.user_ids = canonical.user_ids;
+  }
+  if (canonical.contact_id) {
+    canonicalSeconds.contact_id = canonical.contact_id;
+    canonicalSeconds.eventable_type = canonical.eventable_type;
+    canonicalSeconds.eventable_id = canonical.eventable_id;
+  }
+
   const computeMissingFields = (rb: Record<string, any> | null): string[] => {
     const missing: string[] = [];
     if (!rb) return ["readback"];
-    
+
     if (!rb.user_id) missing.push("user_id");
+
     const hasTimeStart = rb.starts_at || (rb.start_date && rb.start_time);
     const hasTimeEnd = rb.ends_at || (rb.end_date && rb.end_time);
     if (!hasTimeStart) missing.push("start_time");
     if (!hasTimeEnd) missing.push("end_time");
+
     if (opts.eventTypeId && !rb.event_type_id) missing.push("event_type_id");
     if (opts.requiresLocation && opts.locationId && !rb.location_id) missing.push("location_id");
     if (opts.contactId && !rb.contact_id) missing.push("contact_id");
-    
+
     return missing;
   };
-  
-  const postEvent = async (step: string, payload: any): Promise<{ createdId: string | null; status: number; ok: boolean; excerpt: string }> => {
+
+  const postEvent = async (
+    step: string,
+    payload: any
+  ): Promise<{ createdId: string | null; status: number; ok: boolean; excerpt: string }> => {
     const res = await lawmaticsFetch(accessToken, "POST", "/v1/events", payload);
     const { ok, status, json, excerpt } = await lawmaticsJson(res);
     attempts.push({ step, status, ok, note: excerpt || undefined });
     return { createdId: pickString(json?.data?.id ?? json?.id), status, ok, excerpt };
   };
-  
+
   await writeLog(supabase, meetingId, runId, "lawmatics_create_start", "info", "Creating Lawmatics appointment...", {
-    timezone: opts.timezone,
-    start: startParts,
-    end: endParts,
-    user_id: opts.userId,
-    contact_id: opts.contactId,
-    event_type_id: opts.eventTypeId,
-    location_id: opts.locationId,
+    timezoneUsed: opts.timezone,
+    computed: {
+      start_date: startParts.date,
+      start_time: startParts.time,
+      start_time_seconds: startParts.timeSeconds,
+      end_date: endParts.date,
+      end_time: endParts.time,
+      end_time_seconds: endParts.timeSeconds,
+      starts_at: opts.startDatetime,
+      ends_at: opts.endDatetime,
+    },
+    ids: {
+      user_id: opts.userId,
+      contact_id: opts.contactId,
+      event_type_id: opts.eventTypeId,
+      location_id: opts.locationId,
+    },
   });
-  
-  // Attempt 1: Standard payload
-  console.log("[Lawmatics] Creating appointment (canonical):", JSON.stringify({
-    ...canonical, description: "..." 
-  }));
-  let a1 = await postEvent("create_canonical", canonical);
-  
+
+  // Attempt 1: HH:mm payload
+  console.log("[Lawmatics] Creating appointment (HH:mm):", JSON.stringify({ ...canonical, description: "..." }));
+  let a1 = await postEvent("create_hhmm", canonical);
+
+  // If create failed, try HH:mm:ss payload
+  if (!a1.ok) {
+    console.log("[Lawmatics] Retry create (HH:mm:ss):", JSON.stringify({ ...canonicalSeconds, description: "..." }));
+    a1 = await postEvent("create_hhmmss", canonicalSeconds);
+  }
+
   // If fails, try 12h time format
   if (!a1.ok) {
     const canonical12h = { ...canonical, start_time: startParts.time12, end_time: endParts.time12 };
-    console.log("[Lawmatics] Retry with 12h time:", startParts.time12);
+    console.log("[Lawmatics] Retry create (12h):", startParts.time12);
     a1 = await postEvent("create_12h_time", canonical12h);
   }
-  
+
   // Try {event: ...} envelope
   if (!a1.ok) {
-    console.log("[Lawmatics] Retry with {event:} envelope");
+    console.log("[Lawmatics] Retry create with {event:} envelope");
     a1 = await postEvent("create_event_envelope", { event: canonical });
   }
-  
+
   // Try {data: ...} envelope
   if (!a1.ok) {
-    console.log("[Lawmatics] Retry with {data:} envelope");
+    console.log("[Lawmatics] Retry create with {data:} envelope");
     a1 = await postEvent("create_data_envelope", { data: canonical });
   }
-  
+
   if (!a1.ok || !a1.createdId) {
     await writeLog(supabase, meetingId, runId, "lawmatics_create_failed", "error", "All create attempts failed", {
       attempts,
@@ -545,76 +596,105 @@ async function createLawmaticsAppointment(
       error: `Lawmatics create failed: ${a1.excerpt}`,
     };
   }
-  
+
   // Read back the created event
   console.log("[Lawmatics] Created event ID:", a1.createdId, "- reading back...");
-  const readback = await lawmaticsReadEvent(accessToken, a1.createdId);
-  const missingFields = computeMissingFields(readback);
-  
+  let readback = await lawmaticsReadEvent(accessToken, a1.createdId);
+  let missingFields = computeMissingFields(readback);
+
   await writeLog(supabase, meetingId, runId, "lawmatics_readback", "info", "Appointment readback", {
     event_id: a1.createdId,
     readback,
     missingFields,
   });
-  
+
+  // If missing times specifically, try to repair with HH:mm:ss first
+  const missingTimes = missingFields.includes("start_time") || missingFields.includes("end_time");
+
+  if (missingTimes) {
+    await writeLog(supabase, meetingId, runId, "lawmatics_repair_times", "warn", "Readback missing time fields; attempting HH:mm:ss repair", {
+      event_id: a1.createdId,
+      computed: {
+        start_date: startParts.date,
+        start_time: startParts.time,
+        start_time_seconds: startParts.timeSeconds,
+        end_date: endParts.date,
+        end_time: endParts.time,
+        end_time_seconds: endParts.timeSeconds,
+      },
+    });
+
+    const patchSeconds = await lawmaticsUpdateEvent(accessToken, a1.createdId, "PATCH", canonicalSeconds);
+    attempts.push({ step: "patch_repair_hhmmss", status: patchSeconds.status, ok: patchSeconds.ok, note: patchSeconds.excerpt });
+
+    readback = await lawmaticsReadEvent(accessToken, a1.createdId);
+    missingFields = computeMissingFields(readback);
+
+    await writeLog(supabase, meetingId, runId, "lawmatics_repair_times_readback", "info", "After HH:mm:ss repair", {
+      readback,
+      missingFields,
+    });
+  }
+
   if (missingFields.length === 0) {
     await writeLog(supabase, meetingId, runId, "lawmatics_success", "success", "Appointment created and verified complete", {
       event_id: a1.createdId,
     });
     return { ok: true, complete: true, createdId: a1.createdId, readback, missingFields: [], attempts };
   }
-  
+
   console.log("[Lawmatics] Appointment incomplete, missing:", missingFields, "- attempting repair");
-  
-  // Try PATCH repair
+
+  // Try PATCH repair (original canonical)
   const patchResult = await lawmaticsUpdateEvent(accessToken, a1.createdId, "PATCH", canonical);
   attempts.push({ step: "patch_repair", status: patchResult.status, ok: patchResult.ok, note: patchResult.excerpt });
-  
+
   if (patchResult.ok) {
     const readback2 = await lawmaticsReadEvent(accessToken, a1.createdId);
     const missing2 = computeMissingFields(readback2);
-    
+
     await writeLog(supabase, meetingId, runId, "lawmatics_patch_readback", "info", "After PATCH repair", {
       readback: readback2,
       missingFields: missing2,
     });
-    
+
     if (missing2.length === 0) {
       await writeLog(supabase, meetingId, runId, "lawmatics_success", "success", "Appointment repaired via PATCH", {
         event_id: a1.createdId,
       });
       return { ok: true, complete: true, createdId: a1.createdId, readback: readback2, missingFields: [], attempts };
     }
-    
-    // Try PUT
+
+    // Try PUT if PATCH didn't fully fix it
     const putResult = await lawmaticsUpdateEvent(accessToken, a1.createdId, "PUT", canonical);
     attempts.push({ step: "put_repair", status: putResult.status, ok: putResult.ok, note: putResult.excerpt });
-    
+
     if (putResult.ok) {
       const readback3 = await lawmaticsReadEvent(accessToken, a1.createdId);
       const missing3 = computeMissingFields(readback3);
-      
+
       await writeLog(supabase, meetingId, runId, "lawmatics_put_readback", "info", "After PUT repair", {
         readback: readback3,
         missingFields: missing3,
       });
-      
+
       if (missing3.length === 0) {
         await writeLog(supabase, meetingId, runId, "lawmatics_success", "success", "Appointment repaired via PUT", {
           event_id: a1.createdId,
         });
         return { ok: true, complete: true, createdId: a1.createdId, readback: readback3, missingFields: [], attempts };
       }
-      
+
       return { ok: true, complete: false, createdId: a1.createdId, readback: readback3, missingFields: missing3, attempts };
     }
   }
-  
+
   await writeLog(supabase, meetingId, runId, "lawmatics_incomplete", "warn", "Created but incomplete after repairs", {
     event_id: a1.createdId,
     missingFields,
+    readback,
   });
-  
+
   return { ok: true, complete: false, createdId: a1.createdId, readback, missingFields, attempts };
 }
 
@@ -993,11 +1073,24 @@ serve(async (req) => {
       errors: errors.length > 0 ? errors : undefined,
     });
 
+    const lawmaticsDebug = {
+      timezoneUsed: (lawmaticsReadback ? undefined : undefined) as any, // placeholder removed below
+    };
+
     return new Response(JSON.stringify({
       success: overallSuccess,
       lawmaticsAppointmentId,
       lawmaticsComplete,
       lawmaticsReadback,
+      lawmaticsDebug: {
+        timezoneUsed: (lawmaticsReadback?._attributes?.time_zone || lawmaticsReadback?._attributes?.timezone) ?? undefined,
+        computed: {
+          // The authoritative computed values are logged in booking_progress_logs at step "lawmatics_create_start"
+          // We echo the meeting timezone here for quick visibility.
+          meetingTimezone,
+        },
+        readback: lawmaticsReadback,
+      },
       googleEventId,
       errors: errors.length > 0 ? errors : undefined,
     }), {

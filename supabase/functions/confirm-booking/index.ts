@@ -29,35 +29,37 @@ interface MeetingDetails {
 }
 
 // Helper to convert ISO datetime to date/time parts in a given timezone
-function toLocalDateTimeParts(isoDatetime: string, timezone: string): { date: string; time: string } {
-  const date = new Date(isoDatetime);
-  
-  // Get date in YYYY-MM-DD format using en-CA locale (gives ISO format reliably)
-  const dateParts = new Intl.DateTimeFormat('en-CA', {
+function toLocalDateTimeParts(
+  isoDatetime: string,
+  timezone: string
+): { date: string; time: string; timeSeconds: string } {
+  const d = new Date(isoDatetime);
+
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  
-  const year = dateParts.find(p => p.type === 'year')?.value || '';
-  const month = dateParts.find(p => p.type === 'month')?.value || '';
-  const day = dateParts.find(p => p.type === 'day')?.value || '';
-  const dateStr = `${year}-${month}-${day}`;
-  
-  // Get time in HH:mm format using en-GB locale with 24h format
-  const timeParts = new Intl.DateTimeFormat('en-GB', {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const year = dateParts.find((p) => p.type === "year")?.value || "";
+  const month = dateParts.find((p) => p.type === "month")?.value || "";
+  const day = dateParts.find((p) => p.type === "day")?.value || "";
+  const dateStr = `${year}-${month}-${day}`.slice(0, 10);
+
+  const timeParts = new Intl.DateTimeFormat("en-GB", {
     timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
+    hour: "2-digit",
+    minute: "2-digit",
     hour12: false,
-  }).formatToParts(date);
-  
-  const hour = timeParts.find(p => p.type === 'hour')?.value || '00';
-  const minute = timeParts.find(p => p.type === 'minute')?.value || '00';
-  const timeStr = `${hour}:${minute}`;
-  
-  return { date: dateStr, time: timeStr };
+  }).formatToParts(d);
+
+  const hour = timeParts.find((p) => p.type === "hour")?.value || "00";
+  const minute = timeParts.find((p) => p.type === "minute")?.value || "00";
+  const time = `${hour}:${minute}`;
+  const timeSeconds = `${hour}:${minute}:00`;
+
+  return { date: dateStr, time, timeSeconds };
 }
 
 // ========== LAWMATICS HELPERS ==========
@@ -163,19 +165,28 @@ async function createLawmaticsEvent(
   
   const startParts = toLocalDateTimeParts(startDatetime, timezone);
   const endParts = toLocalDateTimeParts(endDatetime, timezone);
-  
+
   const payload: Record<string, any> = {
     name: eventName,
     description,
     all_day: false,
+    is_all_day: false,
+
     starts_at: startDatetime,
     ends_at: endDatetime,
+
     start_date: startParts.date,
     start_time: startParts.time,
     end_date: endParts.date,
     end_time: endParts.time,
   };
-  
+
+  const payloadSeconds: Record<string, any> = {
+    ...payload,
+    start_time: startParts.timeSeconds,
+    end_time: endParts.timeSeconds,
+  };
+
   // Add IDs as NUMBERS
   if (eventTypeId) payload.event_type_id = pickNumber(eventTypeId);
   if (locationId) payload.location_id = pickNumber(locationId);
@@ -188,27 +199,112 @@ async function createLawmaticsEvent(
     payload.eventable_type = "Contact";
     payload.eventable_id = contactId;
   }
-  
+
+  // Mirror IDs to seconds payload
+  for (const k of [
+    "event_type_id",
+    "location_id",
+    "user_id",
+    "user_ids",
+    "contact_id",
+    "eventable_type",
+    "eventable_id",
+  ]) {
+    if (payload[k] !== undefined) payloadSeconds[k] = payload[k];
+  }
+
   console.log("[Lawmatics] Creating event with payload:", JSON.stringify({ ...payload, description: "..." }));
-  
+
+  const readEvent = async (id: string): Promise<any | null> => {
+    try {
+      const res = await fetch(`https://api.lawmatics.com/v1/events/${encodeURIComponent(id)}`, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      const data = json?.data ?? json;
+      const attrs = data?.attributes ?? data;
+      return {
+        id: String(data?.id || id),
+        starts_at: attrs?.starts_at ?? null,
+        ends_at: attrs?.ends_at ?? null,
+        start_date: attrs?.start_date ?? null,
+        start_time: attrs?.start_time ?? null,
+        end_date: attrs?.end_date ?? null,
+        end_time: attrs?.end_time ?? null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const hasTimes = (rb: any | null) => {
+    if (!rb) return false;
+    const hasStart = !!rb.starts_at || (!!rb.start_date && !!rb.start_time);
+    const hasEnd = !!rb.ends_at || (!!rb.end_date && !!rb.end_time);
+    return hasStart && hasEnd;
+  };
+
   try {
     const response = await fetch("https://api.lawmatics.com/v1/events", {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    
+
     const responseText = await response.text();
     console.log("[Lawmatics] Response:", response.status, responseText.slice(0, 500));
-    
-    if (response.ok) {
-      let responseData;
-      try { responseData = JSON.parse(responseText); } catch { responseData = {}; }
-      const appointmentId = responseData.data?.id || responseData.id || null;
-      return { success: true, appointmentId };
+
+    if (!response.ok) {
+      return { success: false, error: `Lawmatics API error: ${response.status} - ${responseText.slice(0, 200)}` };
     }
-    
-    return { success: false, error: `Lawmatics API error: ${response.status} - ${responseText.slice(0, 200)}` };
+
+    let responseData;
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = {};
+    }
+
+    const appointmentId = responseData.data?.id || responseData.id || null;
+    if (!appointmentId) return { success: true, appointmentId: null };
+
+    // Validate readback; if times missing, repair with HH:mm:ss
+    const rb1 = await readEvent(String(appointmentId));
+    if (!hasTimes(rb1)) {
+      console.log("[Lawmatics] Created but missing times; repairing with HH:mm:ss", {
+        timezone,
+        computed: {
+          start_date: startParts.date,
+          start_time: startParts.time,
+          start_time_seconds: startParts.timeSeconds,
+          end_date: endParts.date,
+          end_time: endParts.time,
+          end_time_seconds: endParts.timeSeconds,
+          starts_at: startDatetime,
+          ends_at: endDatetime,
+        },
+        readback: rb1,
+      });
+
+      // PATCH with seconds payload
+      await fetch(`https://api.lawmatics.com/v1/events/${encodeURIComponent(String(appointmentId))}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payloadSeconds),
+      });
+
+      const rb2 = await readEvent(String(appointmentId));
+      if (!hasTimes(rb2)) {
+        return {
+          success: false,
+          error: `Created but incomplete (missing times). Readback: ${JSON.stringify(rb2).slice(0, 200)}`,
+          appointmentId: String(appointmentId),
+        };
+      }
+    }
+
+    return { success: true, appointmentId: String(appointmentId) };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     return { success: false, error: `Lawmatics request failed: ${errorMessage}` };
