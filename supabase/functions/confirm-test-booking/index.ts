@@ -94,7 +94,7 @@ async function writeLog(
   message: string,
   details: Record<string, any> = {}
 ) {
-  await supabase.from("booking_progress_logs").insert({
+  const { error } = await supabase.from("booking_progress_logs").insert({
     meeting_id: meetingId,
     run_id: runId,
     step,
@@ -102,6 +102,17 @@ async function writeLog(
     message,
     details_json: details,
   });
+
+  if (error) {
+    console.error("booking_progress_logs insert failed", {
+      meeting_id: meetingId,
+      run_id: runId,
+      step,
+      level,
+      message,
+      error,
+    });
+  }
 }
 
 // Convert ISO datetime to local date/time parts
@@ -824,6 +835,8 @@ serve(async (req) => {
     let lawmaticsAppointmentId: string | null = null;
     let lawmaticsReadback: Record<string, any> | null = null;
     let lawmaticsComplete = false;
+    let lawmaticsOwnerUserIdUsed: number | null = null;
+    let lawmaticsUsedTimeFormat: "HH:mm:ss" | "HH:mm" | null = null;
     let lawmaticsDebug: any = null;
 
     await writeLog(supabase, meetingId, runId, "lawmatics_start", "info", "Checking Lawmatics connection...");
@@ -848,6 +861,7 @@ serve(async (req) => {
       });
 
       const hostResult = await resolveLawmaticsUserIdByEmail(lawmaticsAccessToken, hostAttorney?.email || null);
+      lawmaticsOwnerUserIdUsed = hostResult.userId ?? null;
       const hostResolveMs = Date.now() - hostResolveStart;
 
       if (hostResult.userId) {
@@ -954,6 +968,7 @@ serve(async (req) => {
       lawmaticsAppointmentId = appointment.createdId;
       lawmaticsReadback = appointment.readback;
       lawmaticsComplete = appointment.persisted;
+      lawmaticsUsedTimeFormat = appointment.usedTimeFormat;
       lawmaticsDebug = {
         timezoneUsed: appointment.timezoneUsed,
         computed: {
@@ -1111,30 +1126,50 @@ serve(async (req) => {
       }
     );
 
+    const hasErrors = errors.length > 0;
+
+    // Always return a structured result (never a generic "Booking failed")
+    const lawmaticsMissingFields: string[] = [];
+    if (lawmaticsAppointmentId) {
+      const rb = lawmaticsReadback;
+      const hasStart = !!rb?.starts_at || (!!rb?.start_date && !!rb?.start_time);
+      const hasEnd = !!rb?.ends_at || (!!rb?.end_date && !!rb?.end_time);
+      if (!hasStart) lawmaticsMissingFields.push("start_time");
+      if (!hasEnd) lawmaticsMissingFields.push("end_time");
+      if (lawmaticsOwnerUserIdUsed && !rb?.user_id) lawmaticsMissingFields.push("user_id");
+      if (meeting.meeting_types?.lawmatics_event_type_id && !rb?.event_type_id) lawmaticsMissingFields.push("event_type_id");
+      if (meeting.location_mode === "InPerson" && meeting.rooms?.lawmatics_location_id && !rb?.location_id) lawmaticsMissingFields.push("location_id");
+    } else {
+      lawmaticsMissingFields.push("createdId");
+    }
+
+    const lawmaticsOk = !!lawmaticsAppointmentId && lawmaticsMissingFields.length === 0;
+
     return new Response(
       JSON.stringify({
-        success: overallSuccess,
+        ok: true,
+        success: true,
+        hasErrors,
         meetingId,
-        lawmatics: {
-          createdId: lawmaticsAppointmentId,
-          persisted: lawmaticsComplete,
-          readback: lawmaticsReadback
-            ? {
-                start_date: lawmaticsReadback.start_date,
-                start_time: lawmaticsReadback.start_time,
-                end_date: lawmaticsReadback.end_date,
-                end_time: lawmaticsReadback.end_time,
-                user_id: lawmaticsReadback.user_id,
-                event_type_id: lawmaticsReadback.event_type_id,
-                location_id: lawmaticsReadback.location_id,
-                starts_at: lawmaticsReadback.starts_at,
-                ends_at: lawmaticsReadback.ends_at,
-              }
-            : null,
-        },
-        lawmaticsDebug,
         googleEventId,
-        errors: errors.length > 0 ? errors : undefined,
+        lawmatics: {
+          ok: lawmaticsOk,
+          createdId: lawmaticsAppointmentId,
+          missingFields: lawmaticsMissingFields,
+          ownerUserIdUsed: lawmaticsOwnerUserIdUsed,
+          usedTimeFormat: lawmaticsUsedTimeFormat,
+          persisted: lawmaticsComplete,
+          payloadComputed: lawmaticsDebug?.computed ?? null,
+          readback: lawmaticsReadback,
+        },
+
+        // Back-compat fields used by the admin UI
+        lawmaticsAppointmentId: lawmaticsAppointmentId,
+        lawmaticsIsValid: lawmaticsOk,
+        lawmaticsReadback: lawmaticsReadback,
+
+        lawmaticsDebug,
+        errors: hasErrors ? errors : undefined,
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1142,14 +1177,22 @@ serve(async (req) => {
     );
 
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
     console.error("Error in confirm-test-booking:", error);
-    return new Response(JSON.stringify({
-      success: false,
-      error: { message: error instanceof Error ? error.message : "Unknown error" },
-      errors,
-    }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+
+    // IMPORTANT: return a 200 with structured error so the admin UI can show details
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        success: false,
+        hasErrors: true,
+        error: { message },
+        errors: errors.length > 0 ? errors : [{ system: "lawmatics", message }],
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
   }
 });

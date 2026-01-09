@@ -163,7 +163,7 @@ async function writeLog(
   message: string,
   details: Record<string, any> = {}
 ) {
-  await supabase.from("booking_progress_logs").insert({
+  const { error } = await supabase.from("booking_progress_logs").insert({
     meeting_id: meetingId,
     run_id: runId,
     step,
@@ -171,6 +171,17 @@ async function writeLog(
     message,
     details_json: details,
   });
+
+  if (error) {
+    console.error("booking_progress_logs insert failed", {
+      meeting_id: meetingId,
+      run_id: runId,
+      step,
+      level,
+      message,
+      error,
+    });
+  }
 }
 
 
