@@ -661,23 +661,6 @@ const AdminSettings = () => {
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={testLawmatics}
-                    disabled={isTesting || isDisconnecting}
-                  >
-                    {isTesting ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Testing...
-                      </>
-                    ) : (
-                      <>
-                        <TestTube className="h-4 w-4 mr-2" />
-                        Test API
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
                     onClick={disconnectLawmatics}
                     disabled={isDisconnecting || isConnecting}
                     className="text-destructive hover:text-destructive"
