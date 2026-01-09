@@ -1346,20 +1346,47 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
                     </div>
                     
                     {/* Lawmatics Status */}
-                    <div className="flex items-center gap-2">
-                      {bookingResult.lawmaticsAppointmentId ? (
-                        <>
-                          <CheckCircle className="h-4 w-4 text-green-500" />
-                          <span className="font-medium">Lawmatics:</span>
-                          <span className="text-green-600">Created</span>
-                          <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
-                        </>
-                      ) : (
-                        <>
-                          <XCircle className="h-4 w-4 text-destructive" />
-                          <span className="font-medium">Lawmatics:</span>
-                          <span className="text-destructive">Failed</span>
-                        </>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        {bookingResult.lawmaticsAppointmentId ? (
+                          <>
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                            <span className="font-medium">Lawmatics:</span>
+                            <span className="text-green-600">Created</span>
+                            <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
+                          </>
+                        ) : (
+                          <>
+                            <XCircle className="h-4 w-4 text-destructive" />
+                            <span className="font-medium">Lawmatics:</span>
+                            <span className="text-destructive">Failed</span>
+                          </>
+                        )}
+                      </div>
+                      
+                      {/* Lawmatics Readback Panel */}
+                      {bookingResult.lawmaticsReadback && (
+                        <details className="mt-2 text-xs">
+                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                            View Lawmatics Readback (verified data)
+                          </summary>
+                          <div className="mt-2 p-3 bg-muted rounded-lg">
+                            <pre className="overflow-x-auto whitespace-pre-wrap break-words">
+{JSON.stringify(bookingResult.lawmaticsReadback, null, 2)}
+                            </pre>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="mt-2"
+                              onClick={async () => {
+                                const success = await copyToClipboard(JSON.stringify(bookingResult.lawmaticsReadback, null, 2));
+                                if (success) toast.success("Lawmatics readback copied");
+                              }}
+                            >
+                              <Copy className="h-3 w-3 mr-1" /> Copy Readback
+                            </Button>
+                          </div>
+                        </details>
                       )}
                     </div>
                     
