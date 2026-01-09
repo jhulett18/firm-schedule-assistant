@@ -72,6 +72,182 @@ async function writeLog(
   });
 }
 
+// ========== LAWMATICS HELPERS ==========
+
+// Get current Lawmatics user (the one connected to the system)
+async function lawmaticsGetMe(accessToken: string): Promise<{ id: string; email: string } | null> {
+  try {
+    const response = await fetch("https://api.lawmatics.com/v1/users/me", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (!response.ok) {
+      console.error("[Lawmatics] users/me failed:", response.status);
+      return null;
+    }
+    
+    const data = await response.json();
+    // Support JSON:API style (data.id/data.attributes.email) or flat style
+    const id = data.data?.id || data.id || null;
+    const email = data.data?.attributes?.email || data.email || data.data?.email || null;
+    
+    if (!id) {
+      console.error("[Lawmatics] users/me: no id found in response", JSON.stringify(data).slice(0, 300));
+      return null;
+    }
+    
+    return { id: String(id), email: email || "" };
+  } catch (err) {
+    console.error("[Lawmatics] users/me exception:", err);
+    return null;
+  }
+}
+
+// Find or create a Lawmatics contact for an attendee email
+async function lawmaticsFindOrCreateContact(
+  accessToken: string,
+  attendeeEmail: string,
+  attendeeName?: string
+): Promise<string | null> {
+  console.log("[Lawmatics] Finding or creating contact for:", attendeeEmail);
+  
+  // Step 1: Try find_by_email endpoint
+  try {
+    const findByEmailUrl = `https://api.lawmatics.com/v1/contacts/find_by_email?email=${encodeURIComponent(attendeeEmail)}`;
+    const findResp = await fetch(findByEmailUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (findResp.ok) {
+      const findData = await findResp.json();
+      const contactId = findData.data?.id || findData.id;
+      if (contactId) {
+        console.log("[Lawmatics] Found contact via find_by_email:", contactId);
+        return String(contactId);
+      }
+    } else if (findResp.status !== 404 && findResp.status !== 405) {
+      console.log("[Lawmatics] find_by_email returned:", findResp.status);
+    }
+  } catch (err) {
+    console.log("[Lawmatics] find_by_email exception:", err);
+  }
+  
+  // Step 2: Fallback to search endpoint
+  try {
+    const searchUrl = `https://api.lawmatics.com/v1/contacts?search=${encodeURIComponent(attendeeEmail)}&per_page=1`;
+    const searchResp = await fetch(searchUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (searchResp.ok) {
+      const searchData = await searchResp.json();
+      const contacts = searchData.data || searchData.contacts || [];
+      if (contacts.length > 0) {
+        const contactId = contacts[0].id;
+        console.log("[Lawmatics] Found contact via search:", contactId);
+        return String(contactId);
+      }
+    }
+  } catch (err) {
+    console.log("[Lawmatics] search exception:", err);
+  }
+  
+  // Step 3: Create a new contact
+  try {
+    const nameParts = (attendeeName || "Test Booking").split(" ");
+    const firstName = nameParts[0] || "Test";
+    const lastName = nameParts.slice(1).join(" ") || "Booking";
+    
+    const createPayload = {
+      first_name: firstName,
+      last_name: lastName,
+      email: attendeeEmail,
+    };
+    
+    console.log("[Lawmatics] Creating contact:", JSON.stringify(createPayload));
+    
+    const createResp = await fetch("https://api.lawmatics.com/v1/contacts", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(createPayload),
+    });
+    
+    if (createResp.ok) {
+      const createData = await createResp.json();
+      const contactId = createData.data?.id || createData.id;
+      console.log("[Lawmatics] Created contact:", contactId);
+      return contactId ? String(contactId) : null;
+    } else {
+      const errText = await createResp.text();
+      console.error("[Lawmatics] Create contact failed:", createResp.status, errText.slice(0, 300));
+    }
+  } catch (err) {
+    console.error("[Lawmatics] Create contact exception:", err);
+  }
+  
+  return null;
+}
+
+// Read back a Lawmatics event to verify its properties
+async function lawmaticsReadbackEvent(
+  accessToken: string,
+  eventId: string
+): Promise<Record<string, any> | null> {
+  try {
+    const response = await fetch(`https://api.lawmatics.com/v1/events/${eventId}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (!response.ok) {
+      console.error("[Lawmatics] readback failed:", response.status);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    // Support JSON:API style (data.attributes.*) or flat style
+    const attrs = data.data?.attributes || data;
+    const id = data.data?.id || data.id || eventId;
+    
+    return {
+      id: String(id),
+      user_id: attrs.user_id || null,
+      contact_id: attrs.contact_id || null,
+      starts_at: attrs.starts_at || null,
+      ends_at: attrs.ends_at || null,
+      start_date: attrs.start_date || null,
+      start_time: attrs.start_time || null,
+      end_date: attrs.end_date || null,
+      end_time: attrs.end_time || null,
+      name: attrs.name || null,
+      event_type_id: attrs.event_type_id || null,
+      location_id: attrs.location_id || null,
+    };
+  } catch (err) {
+    console.error("[Lawmatics] readback exception:", err);
+    return null;
+  }
+}
+
 // Helper to refresh Google token
 async function refreshAccessToken(
   connectionId: string,
@@ -129,6 +305,8 @@ async function createLawmaticsEvent(
   timezone: string,
   eventTypeId?: string | null,
   locationId?: string | null,
+  lawmaticsUserId?: string | null,
+  lawmaticsContactId?: string | null,
   supabase?: any,
   meetingId?: string,
   runId?: string
@@ -148,11 +326,15 @@ async function createLawmaticsEvent(
   
   if (eventTypeId) payloadAttempt1.event_type_id = eventTypeId;
   if (locationId) payloadAttempt1.location_id = locationId;
+  if (lawmaticsUserId) payloadAttempt1.user_id = lawmaticsUserId;
+  if (lawmaticsContactId) payloadAttempt1.contact_id = lawmaticsContactId;
   
   await writeLog(supabase, meetingId!, runId!, "lawmatics_request_attempt_1", "info", "Attempting Lawmatics create with starts_at/ends_at", {
     fields: Object.keys(payloadAttempt1),
     starts_at: startDatetime,
     ends_at: endDatetime,
+    user_id: lawmaticsUserId,
+    contact_id: lawmaticsContactId,
   });
   
   console.log("[Lawmatics] Attempt 1 payload:", JSON.stringify(payloadAttempt1));
@@ -194,7 +376,7 @@ async function createLawmaticsEvent(
     if (!shouldRetry) {
       await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics API error (attempt 1)", {
         status: response1.status,
-        error: responseText1.slice(0, 500),
+        error: responseText1.slice(0, 300),
       });
       
       return {
@@ -203,7 +385,7 @@ async function createLawmaticsEvent(
           system: "lawmatics",
           status: response1.status,
           message: `Lawmatics API error: ${response1.status}`,
-          responseExcerpt: responseText1.slice(0, 500),
+          responseExcerpt: responseText1.slice(0, 300),
         },
       };
     }
@@ -215,6 +397,8 @@ async function createLawmaticsEvent(
       end_date: endParts.date,
       end_time: endParts.time,
       timezone,
+      user_id: lawmaticsUserId,
+      contact_id: lawmaticsContactId,
     });
     
     const payloadAttempt2: Record<string, any> = {
@@ -228,6 +412,8 @@ async function createLawmaticsEvent(
     
     if (eventTypeId) payloadAttempt2.event_type_id = eventTypeId;
     if (locationId) payloadAttempt2.location_id = locationId;
+    if (lawmaticsUserId) payloadAttempt2.user_id = lawmaticsUserId;
+    if (lawmaticsContactId) payloadAttempt2.contact_id = lawmaticsContactId;
     
     console.log("[Lawmatics] Attempt 2 payload:", JSON.stringify(payloadAttempt2));
     
@@ -262,7 +448,7 @@ async function createLawmaticsEvent(
     
     await writeLog(supabase, meetingId!, runId!, "lawmatics_error", "error", "Lawmatics API error (attempt 2)", {
       status: response2.status,
-      error: responseText2.slice(0, 500),
+      error: responseText2.slice(0, 300),
     });
     
     return {
@@ -271,7 +457,7 @@ async function createLawmaticsEvent(
         system: "lawmatics",
         status: response2.status,
         message: `Lawmatics API error after retry: ${response2.status}`,
-        responseExcerpt: responseText2.slice(0, 500),
+        responseExcerpt: responseText2.slice(0, 300),
       },
     };
     
@@ -410,6 +596,7 @@ serve(async (req) => {
 
     // Create Lawmatics appointment
     let lawmaticsAppointmentId: string | null = null;
+    let lawmaticsReadback: Record<string, any> | null = null;
 
     await writeLog(supabase, meetingId, runId, "lawmatics_start", "info", "Checking Lawmatics connection...");
 
@@ -421,7 +608,50 @@ serve(async (req) => {
       .maybeSingle();
 
     if (lawmaticsConnection?.access_token) {
-      const client = meeting.external_attendees?.[0];
+      const lawmaticsAccessToken = lawmaticsConnection.access_token;
+      const client = meeting.external_attendees?.[0] as { name?: string; email?: string } | undefined;
+      
+      // Step 1: Get Lawmatics user_id (the connected user who will own the appointment)
+      await writeLog(supabase, meetingId, runId, "lawmatics_me_start", "info", "Fetching Lawmatics user (users/me)...");
+      const meResult = await lawmaticsGetMe(lawmaticsAccessToken);
+      let lawmaticsUserId: string | null = null;
+      
+      if (meResult) {
+        lawmaticsUserId = meResult.id;
+        await writeLog(supabase, meetingId, runId, "lawmatics_me_fetched", "success", "Lawmatics user fetched", {
+          lawmatics_user_id: lawmaticsUserId,
+          lawmatics_user_email: meResult.email,
+        });
+      } else {
+        await writeLog(supabase, meetingId, runId, "lawmatics_me_failed", "warn", "Could not fetch Lawmatics user - appointment may not be assigned");
+      }
+      
+      // Step 2: Find or create contact for the attendee
+      const attendeeEmail = client?.email || hostAttorney?.email || "";
+      const attendeeName = client?.name || "";
+      let lawmaticsContactId: string | null = null;
+      
+      if (attendeeEmail) {
+        await writeLog(supabase, meetingId, runId, "lawmatics_contact_start", "info", "Finding/creating Lawmatics contact...", {
+          attendee_email: attendeeEmail,
+          attendee_name: attendeeName,
+        });
+        
+        lawmaticsContactId = await lawmaticsFindOrCreateContact(lawmaticsAccessToken, attendeeEmail, attendeeName);
+        
+        if (lawmaticsContactId) {
+          await writeLog(supabase, meetingId, runId, "lawmatics_contact_resolved", "success", "Lawmatics contact resolved", {
+            contact_id: lawmaticsContactId,
+            attendee_email: attendeeEmail,
+          });
+        } else {
+          await writeLog(supabase, meetingId, runId, "lawmatics_contact_failed", "warn", "Could not find/create Lawmatics contact - appointment may not be linked to contact");
+        }
+      } else {
+        await writeLog(supabase, meetingId, runId, "lawmatics_contact_skip", "warn", "No attendee email - skipping contact lookup");
+      }
+      
+      // Step 3: Create the event with user_id and contact_id
       const eventName = `[TEST] ${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
 
       const descriptionParts = [
@@ -434,7 +664,7 @@ serve(async (req) => {
       ].filter(Boolean).join("\n");
 
       const lawmaticsResult = await createLawmaticsEvent(
-        lawmaticsConnection.access_token,
+        lawmaticsAccessToken,
         eventName,
         descriptionParts,
         startDatetime,
@@ -442,6 +672,8 @@ serve(async (req) => {
         timezone,
         meeting.meeting_types?.lawmatics_event_type_id,
         meeting.location_mode === "InPerson" ? meeting.rooms?.lawmatics_location_id : null,
+        lawmaticsUserId,
+        lawmaticsContactId,
         supabase,
         meetingId,
         runId
@@ -449,6 +681,18 @@ serve(async (req) => {
 
       if (lawmaticsResult.success) {
         lawmaticsAppointmentId = lawmaticsResult.appointmentId || null;
+        
+        // Step 4: Readback the created event to verify it's linked correctly
+        if (lawmaticsAppointmentId) {
+          await writeLog(supabase, meetingId, runId, "lawmatics_readback_start", "info", "Reading back Lawmatics event...");
+          lawmaticsReadback = await lawmaticsReadbackEvent(lawmaticsAccessToken, lawmaticsAppointmentId);
+          
+          if (lawmaticsReadback) {
+            await writeLog(supabase, meetingId, runId, "lawmatics_readback", "success", "Lawmatics event readback complete", lawmaticsReadback);
+          } else {
+            await writeLog(supabase, meetingId, runId, "lawmatics_readback_failed", "warn", "Could not read back Lawmatics event");
+          }
+        }
       } else if (lawmaticsResult.error) {
         errors.push(lawmaticsResult.error);
       }
@@ -604,6 +848,7 @@ serve(async (req) => {
         ok: true,
         meetingId,
         lawmaticsAppointmentId,
+        lawmaticsReadback,
         googleEventId,
         hasErrors,
         errors,
