@@ -836,7 +836,7 @@ serve(async (req) => {
     let lawmaticsReadback: Record<string, any> | null = null;
     let lawmaticsComplete = false;
     let lawmaticsOwnerUserIdUsed: number | null = null;
-    let lawmaticsUsedTimeFormat: "HH:mm:ss" | "HH:mm" | null = null;
+    let lawmaticsUsedTimeFormat: "HH:mm:ss" | "HH:mm" | "h:mm A" | null = null;
     let lawmaticsDebug: any = null;
 
     await writeLog(supabase, meetingId, runId, "lawmatics_start", "info", "Checking Lawmatics connection...");

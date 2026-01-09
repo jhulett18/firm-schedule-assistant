@@ -451,21 +451,28 @@ export async function lawmaticsReadEvent(
     const eventTypeId = pickString(rel?.event_type?.data?.id ?? attrs?.event_type_id);
     const locationId = pickString(rel?.location?.data?.id ?? attrs?.location_id);
 
-    // Lawmatics often represents assigned users via relationships.users.data
+    // Assigned user can be represented as relationships.user.data OR relationships.users.data OR as user_id attribute.
+    const userRelId = pickString(rel?.user?.data?.id);
     const usersRel: any[] = Array.isArray(rel?.users?.data) ? rel.users.data : [];
-    const userId = pickString(attrs?.user_id ?? usersRel?.[0]?.id);
+    const userId = pickString(attrs?.user_id ?? userRelId ?? usersRel?.[0]?.id);
 
-    // Contact can be represented as contact_id OR as relationships.eventable
+    // Contact can be represented as relationships.contact.data OR contact_id OR as relationships.eventable.
+    const contactRelId = pickString(rel?.contact?.data?.id);
+
     const eventable = rel?.eventable?.data;
     const eventableType = pickString(eventable?.type)?.toLowerCase();
+
     const contactId = pickString(
       attrs?.contact_id ??
+        contactRelId ??
         (eventableType && eventableType.includes("contact") ? eventable?.id : null)
     );
-    
-    // Matter ID
+
+    // Matter ID can be represented as relationships.matter.data OR matter_id OR as relationships.eventable
+    const matterRelId = pickString(rel?.matter?.data?.id);
     const matterId = pickString(
       attrs?.matter_id ??
+        matterRelId ??
         (eventableType && eventableType.includes("matter") ? eventable?.id : null)
     );
 
@@ -614,6 +621,80 @@ export function toLocalDateTimePartsWithSeconds(
   };
 }
 
+/**
+ * Returns the timezone offset in minutes for the given instant in the provided IANA timezone.
+ * Example: America/New_York in winter => -300.
+ */
+export function getTimezoneOffsetMinutes(date: Date, timezone: string): number {
+  // Build the "wall clock" time in the target timezone, then interpret that as UTC.
+  // The difference between that and the actual UTC instant gives the offset.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const year = parseInt(parts.find((p) => p.type === "year")?.value || "0", 10);
+  const month = parseInt(parts.find((p) => p.type === "month")?.value || "1", 10);
+  const day = parseInt(parts.find((p) => p.type === "day")?.value || "1", 10);
+  const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
+  const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+  const second = parseInt(parts.find((p) => p.type === "second")?.value || "0", 10);
+
+  const asUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  const offsetMinutes = Math.round((asUtcMs - date.getTime()) / 60000);
+  return offsetMinutes;
+}
+
+/**
+ * Format an offset (minutes) as ±HH:MM.
+ */
+export function formatOffset(minutes: number): string {
+  const sign = minutes >= 0 ? "+" : "-";
+  const abs = Math.abs(minutes);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${sign}${hh}:${mm}`;
+}
+
+/**
+ * Convert an ISO datetime to local ISO datetime including offset in the provided timezone.
+ * Output: YYYY-MM-DDTHH:mm:ss±HH:MM
+ */
+export function toLocalIsoWithOffset(isoDatetime: string, timezone: string): string {
+  const d = new Date(isoDatetime);
+  const { date, timeHMS } = toLocalDateTimePartsWithSeconds(isoDatetime, timezone);
+  const offset = getTimezoneOffsetMinutes(d, timezone);
+  return `${date}T${timeHMS}${formatOffset(offset)}`;
+}
+
+// ========== JSON:API HELPERS (module-local) ==========
+
+function buildJsonApiRelationship(type: string, id: number | string) {
+  return { data: { type, id: String(id) } };
+}
+
+function buildEventJsonApiPayload(args: {
+  id?: string | number | null;
+  attributes: Record<string, any>;
+  relationships?: Record<string, any>;
+}) {
+  const data: Record<string, any> = {
+    type: "events",
+    attributes: args.attributes,
+  };
+  if (args.id) data.id = String(args.id);
+  if (args.relationships && Object.keys(args.relationships).length > 0) {
+    data.relationships = args.relationships;
+  }
+  return { data };
+}
+
 // ========== APPOINTMENT CREATION WITH VERIFICATION ==========
 
 export interface CreateAppointmentOptions {
@@ -693,7 +774,7 @@ export async function resolveLawmaticsUserIdByEmail(
   }
 }
 
-export type LawmaticsTimeFormat = "HH:mm:ss" | "HH:mm";
+export type LawmaticsTimeFormat = "HH:mm:ss" | "HH:mm" | "h:mm A";
 
 export type CreateOrRepairAppointmentResult = {
   createdId: string | null;
@@ -706,6 +787,8 @@ export type CreateOrRepairAppointmentResult = {
     start_time: string;
     end_date: string;
     end_time: string;
+    starts_at: string;
+    ends_at: string;
   };
   readback: Record<string, any> | null;
   attempts: Array<{ step: string; status: number | null; ok: boolean; note?: string }>;
@@ -721,72 +804,6 @@ export async function createOrRepairLawmaticsAppointment(
 
   const tz = opts.timezone;
 
-  // Compute strict parts in the target timezone
-  const startParts = toLocalDateTimePartsWithSeconds(opts.startDatetime, tz);
-  const endParts = toLocalDateTimePartsWithSeconds(opts.endDatetime, tz);
-
-  const payloadHMS: Record<string, any> = {
-    name: opts.name,
-    description: opts.description,
-    start_date: startParts.date,
-    start_time: startParts.timeHMS,
-    end_date: endParts.date,
-    end_time: endParts.timeHMS,
-    all_day: false,
-    is_all_day: false,
-  };
-
-  const payloadHM: Record<string, any> = {
-    ...payloadHMS,
-    start_time: startParts.timeHM,
-    end_time: endParts.timeHM,
-  };
-
-  // IDs must be numbers
-  const ownerUserIdUsed = opts.userId ? parseInt(String(opts.userId), 10) : null;
-  if (ownerUserIdUsed) payloadHMS.user_id = ownerUserIdUsed;
-  if (ownerUserIdUsed) payloadHM.user_id = ownerUserIdUsed;
-
-  if (opts.eventTypeId) {
-    const v = parseInt(String(opts.eventTypeId), 10);
-    payloadHMS.event_type_id = v;
-    payloadHM.event_type_id = v;
-  }
-
-  if (opts.locationId) {
-    const v = parseInt(String(opts.locationId), 10);
-    payloadHMS.location_id = v;
-    payloadHM.location_id = v;
-  }
-
-  if (opts.contactId) {
-    const v = parseInt(String(opts.contactId), 10);
-    payloadHMS.contact_id = v;
-    payloadHM.contact_id = v;
-  }
-
-  if (opts.matterId) {
-    const v = parseInt(String(opts.matterId), 10);
-    payloadHMS.matter_id = v;
-    payloadHM.matter_id = v;
-  }
-
-  // Helper: does readback show persisted times?
-  const hasTimes = (rb: Record<string, any> | null): boolean => {
-    if (!rb) return false;
-    const hasStart = !!rb.starts_at || (!!rb.start_date && !!rb.start_time);
-    const hasEnd = !!rb.ends_at || (!!rb.end_date && !!rb.end_time);
-    return hasStart && hasEnd;
-  };
-
-  const hasOwnerIfExpected = (rb: Record<string, any> | null): boolean => {
-    if (!ownerUserIdUsed) return true;
-    const rbUser = pickNumber(rb?.user_id);
-    return rbUser === ownerUserIdUsed;
-  };
-
-  const persistOk = (rb: Record<string, any> | null) => hasTimes(rb) && hasOwnerIfExpected(rb);
-
   const log = async (
     step: string,
     level: "info" | "warn" | "error" | "success",
@@ -800,159 +817,322 @@ export async function createOrRepairLawmaticsAppointment(
     }
   };
 
-  await log("lawmatics_create_request", "info", "Posting Lawmatics appointment", {
+  // Compute date/time variants in the target timezone
+  const startParts = toLocalDateTimePartsWithSeconds(opts.startDatetime, tz);
+  const endParts = toLocalDateTimePartsWithSeconds(opts.endDatetime, tz);
+  const startPretty = toLocalDateTimeParts(opts.startDatetime, tz);
+  const endPretty = toLocalDateTimeParts(opts.endDatetime, tz);
+
+  // Also compute explicit ISO w/ offset (often helps Lawmatics persist)
+  const starts_at = toLocalIsoWithOffset(opts.startDatetime, tz);
+  const ends_at = toLocalIsoWithOffset(opts.endDatetime, tz);
+
+  const attributesBase: Record<string, any> = {
+    name: opts.name,
+    description: opts.description,
+
+    start_date: startParts.date,
+    end_date: endParts.date,
+
+    all_day: false,
+    is_all_day: false,
+
+    // Include ISO timestamps too (in local + offset form)
+    starts_at,
+    ends_at,
+  };
+
+  // Relationships are the canonical way to assign owner/type/location/contact/matter
+  const relationships: Record<string, any> = {};
+
+  const relationshipKeys: string[] = [];
+
+  const addRelationship = (key: string, type: string, id: number | string | null) => {
+    if (id === null || id === undefined) return;
+
+    const n = pickNumber(id);
+    if (n === null) {
+      // Keep going, but be explicit.
+      relationshipKeys.push(`${key}:invalid`);
+      return;
+    }
+
+    relationships[key] = buildJsonApiRelationship(type, n);
+    relationshipKeys.push(key);
+  };
+
+  // Owner
+  const ownerUserIdUsed = opts.userId ? pickNumber(opts.userId) : null;
+  addRelationship("user", "users", ownerUserIdUsed);
+
+  // Contact
+  addRelationship("contact", "contacts", opts.contactId ?? null);
+
+  // Matter
+  addRelationship("matter", "matters", opts.matterId ?? null);
+
+  // Event type
+  addRelationship("event_type", "event_types", opts.eventTypeId ?? null);
+
+  // Location
+  addRelationship("location", "locations", opts.locationId ?? null);
+
+  // Compatibility: also include _id fields in attributes when parseable
+  const setCompatAttrId = (key: string, raw: number | string | null | undefined) => {
+    const n = raw == null ? null : pickNumber(raw);
+    if (n == null) return;
+    attributesBase[key] = n;
+  };
+  setCompatAttrId("user_id", ownerUserIdUsed);
+  setCompatAttrId("contact_id", opts.contactId ?? null);
+  setCompatAttrId("matter_id", opts.matterId ?? null);
+  setCompatAttrId("event_type_id", opts.eventTypeId ?? null);
+  setCompatAttrId("location_id", opts.locationId ?? null);
+
+  const variants: Array<{ key: LawmaticsTimeFormat; attrs: Record<string, any> }> = [
+    {
+      key: "HH:mm:ss",
+      attrs: {
+        ...attributesBase,
+        start_time: startParts.timeHMS,
+        end_time: endParts.timeHMS,
+      },
+    },
+    {
+      key: "HH:mm",
+      attrs: {
+        ...attributesBase,
+        start_time: startParts.timeHM,
+        end_time: endParts.timeHM,
+      },
+    },
+    {
+      key: "h:mm A",
+      attrs: {
+        ...attributesBase,
+        start_time: startPretty.time12,
+        end_time: endPretty.time12,
+      },
+    },
+  ];
+
+  const isPersisted = (rb: Record<string, any> | null) => {
+    if (!rb) return { ok: false, missing: ["readback_null"] as string[] };
+
+    const missing: string[] = [];
+
+    // Time persistence: require BOTH styles to be non-null (helps calendar display)
+    if (!rb.start_time) missing.push("start_time");
+    if (!rb.end_time) missing.push("end_time");
+    if (!rb.starts_at) missing.push("starts_at");
+    if (!rb.ends_at) missing.push("ends_at");
+
+    if (ownerUserIdUsed) {
+      const rbUser = pickNumber(rb.user_id);
+      if (rbUser !== ownerUserIdUsed) missing.push("user_id");
+    }
+
+    if (opts.eventTypeId) {
+      const expected = pickNumber(opts.eventTypeId);
+      const got = pickNumber(rb.event_type_id);
+      if (expected != null && got !== expected) missing.push("event_type_id");
+    }
+
+    if (opts.locationId) {
+      const expected = pickNumber(opts.locationId);
+      const got = pickNumber(rb.location_id);
+      if (expected != null && got !== expected) missing.push("location_id");
+    } else if (opts.requiresLocation) {
+      missing.push("location_id");
+    }
+
+    return { ok: missing.length === 0, missing };
+  };
+
+  await log("lawmatics_payload_computed", "info", "Computed Lawmatics JSON:API payload", {
     timezoneUsed: tz,
     computed: {
       start_date: startParts.date,
       start_time_hms: startParts.timeHMS,
       start_time_hm: startParts.timeHM,
+      start_time_12h: startPretty.time12,
       end_date: endParts.date,
       end_time_hms: endParts.timeHMS,
       end_time_hm: endParts.timeHM,
+      end_time_12h: endPretty.time12,
+      starts_at,
+      ends_at,
     },
-    payloadKeys: Object.keys(payloadHMS),
+    relationshipKeys,
   });
 
-  // 1) Create with HH:mm:ss
   let createdId: string | null = null;
-  try {
-    const res = await lawmaticsFetch(accessToken, "POST", "/v1/events", payloadHMS);
-    const { ok, status, json, excerpt } = await lawmaticsJson(res);
-    attempts.push({ step: "create_post_hms", ok, status, note: excerpt || undefined });
+  let lastError: { status: number | null; excerpt?: string; message: string } | null = null;
 
-    await log("lawmatics_create_response", ok ? "success" : "error", "Lawmatics create response", {
-      status,
-      excerpt: excerpt?.slice(0, 500),
+  // --------- CREATE LOOP (POST) ---------
+  for (const v of variants) {
+    await log("lawmatics_create_attempt", "info", `Creating Lawmatics event (variant ${v.key})`, {
+      variant: v.key,
     });
 
-    if (!ok) {
-      return {
-        createdId: null,
-        ownerUserIdUsed,
-        usedTimeFormat: "HH:mm:ss",
-        persisted: false,
-        timezoneUsed: tz,
-        computed: { start_date: startParts.date, start_time: startParts.timeHMS, end_date: endParts.date, end_time: endParts.timeHMS },
-        readback: null,
-        attempts,
-        error: `Lawmatics create failed (${status}): ${excerpt}`,
-      };
-    }
+    try {
+      const body = buildEventJsonApiPayload({ attributes: v.attrs, relationships });
+      const res = await lawmaticsFetch(accessToken, "POST", "/v1/events", body);
+      const { ok, status, json, excerpt } = await lawmaticsJson(res);
+      attempts.push({ step: `create_post_${v.key}`, ok, status, note: excerpt || undefined });
 
-    createdId = pickString(json?.data?.id ?? json?.id);
-    if (!createdId) {
-      return {
-        createdId: null,
-        ownerUserIdUsed,
-        usedTimeFormat: "HH:mm:ss",
-        persisted: false,
-        timezoneUsed: tz,
-        computed: { start_date: startParts.date, start_time: startParts.timeHMS, end_date: endParts.date, end_time: endParts.timeHMS },
-        readback: null,
-        attempts,
-        error: "Lawmatics create returned no id",
-      };
+      if (!ok) {
+        lastError = { status, excerpt, message: `Lawmatics create failed (${status})` };
+        continue;
+      }
+
+      const id = pickString(json?.data?.id ?? json?.id);
+      if (!id) {
+        lastError = { status, excerpt, message: "Lawmatics create returned no id" };
+        continue;
+      }
+
+      createdId = id;
+
+      const readback = await lawmaticsReadEvent(accessToken, createdId);
+      const persistedCheck = isPersisted(readback);
+
+      await log(
+        "lawmatics_readback_after_create",
+        persistedCheck.ok ? "success" : "warn",
+        "Lawmatics readback after create",
+        {
+          event_id: createdId,
+          variant: v.key,
+          persisted: persistedCheck.ok,
+          missingFields: persistedCheck.missing,
+          readback,
+        }
+      );
+
+      if (persistedCheck.ok) {
+        return {
+          createdId,
+          ownerUserIdUsed,
+          usedTimeFormat: v.key,
+          persisted: true,
+          timezoneUsed: tz,
+          computed: {
+            start_date: startParts.date,
+            start_time: String(v.attrs.start_time),
+            end_date: endParts.date,
+            end_time: String(v.attrs.end_time),
+            starts_at,
+            ends_at,
+          },
+          readback,
+          attempts,
+        };
+      }
+
+      // If created but incomplete, we break into repair loop below (keep the first createdId)
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastError = { status: null, message: `Lawmatics create exception: ${msg}` };
+      continue;
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  }
+
+  if (!createdId) {
     return {
       createdId: null,
       ownerUserIdUsed,
       usedTimeFormat: "HH:mm:ss",
       persisted: false,
       timezoneUsed: tz,
-      computed: { start_date: startParts.date, start_time: startParts.timeHMS, end_date: endParts.date, end_time: endParts.timeHMS },
+      computed: {
+        start_date: startParts.date,
+        start_time: startParts.timeHMS,
+        end_date: endParts.date,
+        end_time: endParts.timeHMS,
+        starts_at,
+        ends_at,
+      },
       readback: null,
       attempts,
-      error: `Lawmatics create exception: ${msg}`,
+      error: lastError?.excerpt
+        ? `${lastError.message}: ${lastError.excerpt}`
+        : lastError?.message || "Lawmatics create failed",
     };
   }
 
-  // 2) Readback
-  await log("lawmatics_readback_after_create", "info", "Reading Lawmatics appointment", { event_id: createdId });
-  let readback = await lawmaticsReadEvent(accessToken, createdId);
+  // --------- REPAIR LOOP (PUT) ---------
+  for (const v of variants) {
+    await log("lawmatics_repair_attempt", "warn", `Repairing Lawmatics event via PUT (variant ${v.key})`, {
+      event_id: createdId,
+      variant: v.key,
+    });
 
-  if (persistOk(readback)) {
-    await log("lawmatics_final_status", "success", "Lawmatics appointment persisted", { event_id: createdId });
-    return {
-      createdId,
-      ownerUserIdUsed,
-      usedTimeFormat: "HH:mm:ss",
-      persisted: true,
-      timezoneUsed: tz,
-      computed: { start_date: startParts.date, start_time: startParts.timeHMS, end_date: endParts.date, end_time: endParts.timeHMS },
-      readback,
-      attempts,
-    };
+    const body = buildEventJsonApiPayload({ id: createdId, attributes: v.attrs, relationships });
+    const put = await lawmaticsUpdateEvent(accessToken, createdId, "PUT", body);
+    attempts.push({ step: `repair_put_${v.key}`, ok: put.ok, status: put.status, note: put.excerpt || undefined });
+
+    const readback = await lawmaticsReadEvent(accessToken, createdId);
+    const persistedCheck = isPersisted(readback);
+
+    await log(
+      "lawmatics_readback_after_repair",
+      persistedCheck.ok ? "success" : "error",
+      "Lawmatics readback after repair",
+      {
+        event_id: createdId,
+        variant: v.key,
+        put_status: put.status,
+        put_ok: put.ok,
+        put_excerpt: put.excerpt?.slice(0, 500),
+        persisted: persistedCheck.ok,
+        missingFields: persistedCheck.missing,
+        readback,
+      }
+    );
+
+    if (persistedCheck.ok) {
+      return {
+        createdId,
+        ownerUserIdUsed,
+        usedTimeFormat: v.key,
+        persisted: true,
+        timezoneUsed: tz,
+        computed: {
+          start_date: startParts.date,
+          start_time: String(v.attrs.start_time),
+          end_date: endParts.date,
+          end_time: String(v.attrs.end_time),
+          starts_at,
+          ends_at,
+        },
+        readback,
+        attempts,
+      };
+    }
   }
 
-  // 3) Repair via PUT with HH:mm:ss
-  await log("lawmatics_repair_put_request", "warn", "Repairing Lawmatics appointment via PUT (HH:mm:ss)", {
-    event_id: createdId,
-  });
-
-  const put1 = await lawmaticsUpdateEvent(accessToken, createdId, "PUT", payloadHMS);
-  attempts.push({ step: "repair_put_hms", ok: put1.ok, status: put1.status, note: put1.excerpt || undefined });
-
-  await log("lawmatics_readback_after_repair", "info", "Reading Lawmatics appointment after PUT (HH:mm:ss)", {
-    event_id: createdId,
-    status: put1.status,
-    ok: put1.ok,
-    excerpt: put1.excerpt?.slice(0, 500),
-  });
-
-  readback = await lawmaticsReadEvent(accessToken, createdId);
-  if (persistOk(readback)) {
-    await log("lawmatics_final_status", "success", "Lawmatics appointment persisted after repair", { event_id: createdId });
-    return {
-      createdId,
-      ownerUserIdUsed,
-      usedTimeFormat: "HH:mm:ss",
-      persisted: true,
-      timezoneUsed: tz,
-      computed: { start_date: startParts.date, start_time: startParts.timeHMS, end_date: endParts.date, end_time: endParts.timeHMS },
-      readback,
-      attempts,
-    };
-  }
-
-  // 4) Repair via PUT with HH:mm fallback
-  await log("lawmatics_repair_put_request", "warn", "Repairing Lawmatics appointment via PUT (HH:mm)", { event_id: createdId });
-
-  const put2 = await lawmaticsUpdateEvent(accessToken, createdId, "PUT", payloadHM);
-  attempts.push({ step: "repair_put_hm", ok: put2.ok, status: put2.status, note: put2.excerpt || undefined });
-
-  readback = await lawmaticsReadEvent(accessToken, createdId);
-  const persisted = persistOk(readback);
-
-  await log("lawmatics_final_status", persisted ? "success" : "error", "Lawmatics final persisted status", {
-    event_id: createdId,
-    persisted,
-    readback: readback
-      ? {
-          start_date: readback.start_date,
-          start_time: readback.start_time,
-          end_date: readback.end_date,
-          end_time: readback.end_time,
-          starts_at: readback.starts_at,
-          ends_at: readback.ends_at,
-          user_id: readback.user_id,
-          event_type_id: readback.event_type_id,
-          location_id: readback.location_id,
-        }
-      : null,
-  });
+  const finalReadback = await lawmaticsReadEvent(accessToken, createdId);
+  const finalCheck = isPersisted(finalReadback);
 
   return {
     createdId,
     ownerUserIdUsed,
-    usedTimeFormat: persisted ? "HH:mm" : "HH:mm",
-    persisted,
+    usedTimeFormat: "HH:mm:ss",
+    persisted: false,
     timezoneUsed: tz,
-    computed: { start_date: startParts.date, start_time: startParts.timeHM, end_date: endParts.date, end_time: endParts.timeHM },
-    readback,
+    computed: {
+      start_date: startParts.date,
+      start_time: startParts.timeHMS,
+      end_date: endParts.date,
+      end_time: endParts.timeHMS,
+      starts_at,
+      ends_at,
+    },
+    readback: finalReadback,
     attempts,
-    ...(persisted ? {} : { error: "Lawmatics appointment did not persist times/owner after repair" }),
+    error: `Lawmatics appointment created but did not persist required fields: ${finalCheck.missing.join(", ")}`,
   };
 }
 
@@ -967,8 +1147,10 @@ export async function createLawmaticsAppointment(
 
   const missingFields: string[] = [];
   if (!r.createdId) missingFields.push("create_failed");
-  if (r.createdId && !r.persisted) missingFields.push("start_time", "end_time");
+  if (r.createdId && !r.persisted) missingFields.push("start_time", "end_time", "starts_at", "ends_at");
   if (opts.userId && !pickNumber(r.readback?.user_id)) missingFields.push("user_id");
+  if (opts.eventTypeId && !pickNumber(r.readback?.event_type_id)) missingFields.push("event_type_id");
+  if ((opts.locationId || opts.requiresLocation) && !pickNumber(r.readback?.location_id)) missingFields.push("location_id");
 
   return {
     ok: !!r.createdId,
