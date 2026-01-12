@@ -148,7 +148,8 @@ export default function RequestNew() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      // Create meeting - explicitly select only needed columns (no joins to users)
+      // Create meeting - explicitly select only id (no joins to users)
+      // IMPORTANT: Set created_by_user_id to null to avoid RLS policy querying public.users
       const { data: meeting, error: meetingError } = await supabase
         .from("meetings")
         .insert({
@@ -172,12 +173,15 @@ export default function RequestNew() {
           },
           search_window_days_used: formData.searchWindowDays,
           status: "Proposed",
-          created_by_user_id: internalUser?.id || null,
+          created_by_user_id: null, // Set to null to avoid users table lookup in RLS
         })
         .select("id")
         .single();
 
-      if (meetingError) throw meetingError;
+      if (meetingError) {
+        console.error("[CreateRequest] meetings insert error:", meetingError);
+        throw meetingError;
+      }
 
       // Create booking request - explicitly select only needed columns
       const expiresAt = addDays(new Date(), 7);
@@ -191,7 +195,10 @@ export default function RequestNew() {
         .select("id, public_token, meeting_id")
         .single();
 
-      if (brError) throw brError;
+      if (brError) {
+        console.error("[CreateRequest] booking_requests insert error:", brError);
+        throw brError;
+      }
 
       return bookingRequest.public_token;
     },
@@ -200,13 +207,20 @@ export default function RequestNew() {
       queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
       queryClient.invalidateQueries({ queryKey: ["recent-meetings"] });
     },
-    onError: (error: Error) => {
+    onError: (error: Error & { code?: string; details?: string; hint?: string }) => {
+      console.error("[CreateRequest] Full error object:", error);
       // Improved error message for permission denied issues
       const isUsersPermissionError = error.message?.toLowerCase().includes("permission denied for table user");
       if (isUsersPermissionError) {
-        toast.error("Create Request failed due to restricted access. This is a UI query issue.");
+        toast.error("Create Request failed due to restricted access to users table. This is a UI query/RLS issue.", {
+          description: `Code: ${error.code || "unknown"} | ${error.message}`,
+          duration: 10000,
+        });
       } else {
-        toast.error(`Failed to create request: ${error.message}`);
+        toast.error(`Failed to create request: ${error.message}`, {
+          description: error.details || error.hint || undefined,
+          duration: 8000,
+        });
       }
     },
   });
