@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -26,10 +26,13 @@ import {
   Copy,
   Mail,
   ExternalLink,
+  Calendar,
+  AlertCircle,
 } from "lucide-react";
 import { copyToClipboard, getBookingUrl, generateClientEmailTemplate } from "@/lib/clipboard";
 
 const STEPS = [
+  { id: "calendar", label: "Calendar", icon: Calendar },
   { id: "client", label: "Client Details", icon: User },
   { id: "meeting", label: "Meeting Type", icon: FileText },
   { id: "participants", label: "Participants", icon: Users },
@@ -37,6 +40,13 @@ const STEPS = [
   { id: "schedule", label: "Scheduling", icon: Clock },
   { id: "review", label: "Review", icon: CheckCircle },
 ];
+
+interface AdminCalendar {
+  id: string;
+  summary: string;
+  primary: boolean;
+  accessRole: string;
+}
 
 interface FormData {
   clientName: string;
@@ -80,6 +90,55 @@ export default function RequestNew() {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [adminCalendars, setAdminCalendars] = useState<AdminCalendar[]>([]);
+  const [calendarsLoading, setCalendarsLoading] = useState(true);
+  const [calendarsError, setCalendarsError] = useState<string | null>(null);
+
+  // Fetch admin's Google calendars on mount
+  useEffect(() => {
+    async function fetchCalendars() {
+      setCalendarsLoading(true);
+      setCalendarsError(null);
+      
+      try {
+        const { data, error } = await supabase.functions.invoke("google-list-calendars", {
+          body: {},
+        });
+        
+        if (error) {
+          console.error("Failed to fetch calendars:", error);
+          setCalendarsError("Failed to load calendars. Please check your Google connection.");
+          setAdminCalendars([]);
+        } else if (data?.error && data.calendars?.length === 0) {
+          setCalendarsError(data.error);
+          setAdminCalendars([]);
+        } else {
+          // Filter to only writable calendars (owner or writer access)
+          const writableCalendars = (data?.calendars || []).filter(
+            (cal: AdminCalendar) => cal.accessRole === "owner" || cal.accessRole === "writer"
+          );
+          setAdminCalendars(writableCalendars);
+          
+          // Auto-select primary calendar if none selected
+          if (!formData.googleCalendarId && writableCalendars.length > 0) {
+            const primaryCal = writableCalendars.find((c: AdminCalendar) => c.primary);
+            if (primaryCal) {
+              updateForm({ googleCalendarId: primaryCal.id });
+            } else {
+              updateForm({ googleCalendarId: writableCalendars[0].id });
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching calendars:", err);
+        setCalendarsError("Failed to load calendars.");
+      } finally {
+        setCalendarsLoading(false);
+      }
+    }
+    
+    fetchCalendars();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch meeting types
   const { data: meetingTypes } = useQuery({
@@ -232,26 +291,37 @@ export default function RequestNew() {
     const newErrors: Record<string, string> = {};
 
     switch (step) {
-      case 0: // Client details
+      case 0: // Calendar selection
+        if (!formData.googleCalendarId) {
+          newErrors.googleCalendarId = "Please select a calendar for booking events";
+        }
+        break;
+      case 1: // Client details
         if (!formData.clientName.trim()) newErrors.clientName = "Name is required";
         if (!formData.clientEmail.trim()) newErrors.clientEmail = "Email is required";
         else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.clientEmail)) {
           newErrors.clientEmail = "Invalid email format";
         }
         break;
-      case 1: // Meeting type
-        // Meeting type is optional but duration is required
+      case 2: // Meeting type
+        if (!formData.meetingTypeId) {
+          newErrors.meetingTypeId = "Meeting type is required";
+        }
         if (!formData.duration || formData.duration < 15) {
           newErrors.duration = "Duration must be at least 15 minutes";
         }
         break;
-      case 2: // Participants
-        // Optional
+      case 3: // Participants
+        if (!formData.hostAttorneyId) {
+          newErrors.hostAttorneyId = "Host attorney is required";
+        }
         break;
-      case 3: // Room
-        // Only validate if in-person
+      case 4: // Room
+        if (formData.locationMode === "InPerson" && !formData.roomId) {
+          newErrors.roomId = "Room is required for in-person meetings";
+        }
         break;
-      case 4: // Schedule
+      case 5: // Schedule
         if (!formData.searchWindowDays || formData.searchWindowDays < 1) {
           newErrors.searchWindowDays = "Search window must be at least 1 day";
         }
@@ -397,8 +467,65 @@ export default function RequestNew() {
             <CardTitle>{STEPS[currentStep].label}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Step 0: Client Details */}
+            {/* Step 0: Calendar Selection */}
             {currentStep === 0 && (
+              <>
+                <div>
+                  <Label>Admin Calendar to Book On *</Label>
+                  {calendarsLoading ? (
+                    <div className="flex items-center gap-2 py-3 text-muted-foreground">
+                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      Loading calendars...
+                    </div>
+                  ) : calendarsError ? (
+                    <div className="flex items-start gap-2 py-3 text-destructive">
+                      <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm">{calendarsError}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Please connect your Google Calendar in Admin Settings.
+                        </p>
+                      </div>
+                    </div>
+                  ) : adminCalendars.length === 0 ? (
+                    <div className="flex items-start gap-2 py-3 text-status-warning">
+                      <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm">No writable calendars found</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Connect a Google Calendar with write access in Admin Settings.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <Select
+                      value={formData.googleCalendarId}
+                      onValueChange={(v) => updateForm({ googleCalendarId: v })}
+                    >
+                      <SelectTrigger className={errors.googleCalendarId ? "border-destructive" : ""}>
+                        <SelectValue placeholder="Select a calendar" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {adminCalendars.map((cal) => (
+                          <SelectItem key={cal.id} value={cal.id}>
+                            {cal.summary} {cal.primary && "(Primary)"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {errors.googleCalendarId && (
+                    <p className="text-sm text-destructive mt-1">{errors.googleCalendarId}</p>
+                  )}
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Confirmed bookings will create events on this calendar.
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* Step 1: Client Details */}
+            {currentStep === 1 && (
               <>
                 <div>
                   <Label htmlFor="clientName">Client Name *</Label>
@@ -440,17 +567,17 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 1: Meeting Type */}
-            {currentStep === 1 && (
+            {/* Step 2: Meeting Type */}
+            {currentStep === 2 && (
               <>
                 <div>
-                  <Label>Meeting Type</Label>
+                  <Label>Meeting Type *</Label>
                   <Select
                     value={formData.meetingTypeId}
                     onValueChange={(v) => updateForm({ meetingTypeId: v })}
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a meeting type (optional)" />
+                    <SelectTrigger className={errors.meetingTypeId ? "border-destructive" : ""}>
+                      <SelectValue placeholder="Select a meeting type" />
                     </SelectTrigger>
                     <SelectContent>
                       {meetingTypes?.map((mt) => (
@@ -460,6 +587,9 @@ export default function RequestNew() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {errors.meetingTypeId && (
+                    <p className="text-sm text-destructive mt-1">{errors.meetingTypeId}</p>
+                  )}
                 </div>
                 <div>
                   <Label htmlFor="duration">Duration (minutes) *</Label>
@@ -504,17 +634,17 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 2: Participants */}
-            {currentStep === 2 && (
+            {/* Step 3: Participants */}
+            {currentStep === 3 && (
               <>
                 <div>
-                  <Label>Host Attorney</Label>
+                  <Label>Host Attorney *</Label>
                   <Select
                     value={formData.hostAttorneyId}
                     onValueChange={(v) => updateForm({ hostAttorneyId: v })}
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select host attorney (optional)" />
+                    <SelectTrigger className={errors.hostAttorneyId ? "border-destructive" : ""}>
+                      <SelectValue placeholder="Select host attorney" />
                     </SelectTrigger>
                     <SelectContent>
                       {attorneys?.map((a) => (
@@ -524,6 +654,9 @@ export default function RequestNew() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {errors.hostAttorneyId && (
+                    <p className="text-sm text-destructive mt-1">{errors.hostAttorneyId}</p>
+                  )}
                   <p className="text-sm text-muted-foreground mt-1">
                     The primary attorney for this meeting
                   </p>
@@ -561,8 +694,8 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 3: Room */}
-            {currentStep === 3 && (
+            {/* Step 4: Room */}
+            {currentStep === 4 && (
               <>
                 {formData.locationMode === "Zoom" ? (
                   <div className="text-center py-8">
@@ -575,13 +708,13 @@ export default function RequestNew() {
                   </div>
                 ) : (
                   <div>
-                    <Label>Conference Room</Label>
+                    <Label>Conference Room *</Label>
                     <Select
                       value={formData.roomId}
                       onValueChange={(v) => updateForm({ roomId: v })}
                     >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a room (optional)" />
+                      <SelectTrigger className={errors.roomId ? "border-destructive" : ""}>
+                        <SelectValue placeholder="Select a room" />
                       </SelectTrigger>
                       <SelectContent>
                         {rooms?.map((r) => (
@@ -591,6 +724,9 @@ export default function RequestNew() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {errors.roomId && (
+                      <p className="text-sm text-destructive mt-1">{errors.roomId}</p>
+                    )}
                     <p className="text-sm text-muted-foreground mt-1">
                       Select a room to check its availability when suggesting times
                     </p>
@@ -604,8 +740,8 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 4: Scheduling */}
-            {currentStep === 4 && (
+            {/* Step 5: Scheduling */}
+            {currentStep === 5 && (
               <>
                 <div>
                   <Label htmlFor="searchWindow">Search Window (days)</Label>
@@ -680,10 +816,16 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 5: Review */}
-            {currentStep === 5 && (
+            {/* Step 6: Review */}
+            {currentStep === 6 && (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Calendar</p>
+                    <p className="font-medium">
+                      {adminCalendars.find((c) => c.id === formData.googleCalendarId)?.summary || formData.googleCalendarId}
+                    </p>
+                  </div>
                   <div>
                     <p className="text-sm text-muted-foreground">Client</p>
                     <p className="font-medium">{formData.clientName}</p>
@@ -705,14 +847,12 @@ export default function RequestNew() {
                       {formData.locationMode === "Zoom" ? "Video Call" : "In-Person"}
                     </p>
                   </div>
-                  {formData.hostAttorneyId && (
-                    <div>
-                      <p className="text-sm text-muted-foreground">Host Attorney</p>
-                      <p className="font-medium">
-                        {attorneys?.find((a) => a.id === formData.hostAttorneyId)?.name}
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <p className="text-sm text-muted-foreground">Host Attorney</p>
+                    <p className="font-medium">
+                      {attorneys?.find((a) => a.id === formData.hostAttorneyId)?.name}
+                    </p>
+                  </div>
                   {formData.roomId && formData.locationMode === "InPerson" && (
                     <div>
                       <p className="text-sm text-muted-foreground">Room</p>
@@ -737,6 +877,7 @@ export default function RequestNew() {
                   <p className="text-muted-foreground">
                     After you create this request, you'll get a link to send to {formData.clientName}. 
                     They'll be able to pick from available times that work for everyone's calendar.
+                    Confirmed bookings will create events on your selected calendar.
                   </p>
                 </div>
               </div>
