@@ -310,6 +310,8 @@ export type Database = {
           duration_minutes: number
           end_datetime: string | null
           external_attendees: Json
+          google_calendar_id: string | null
+          google_event_id: string | null
           host_attorney_user_id: string | null
           id: string
           in_person_location_choice:
@@ -339,6 +341,8 @@ export type Database = {
           duration_minutes?: number
           end_datetime?: string | null
           external_attendees?: Json
+          google_calendar_id?: string | null
+          google_event_id?: string | null
           host_attorney_user_id?: string | null
           id?: string
           in_person_location_choice?:
@@ -368,6 +372,8 @@ export type Database = {
           duration_minutes?: number
           end_datetime?: string | null
           external_attendees?: Json
+          google_calendar_id?: string | null
+          google_event_id?: string | null
           host_attorney_user_id?: string | null
           id?: string
           in_person_location_choice?:

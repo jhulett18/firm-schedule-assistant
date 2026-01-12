@@ -52,6 +52,7 @@ interface FormData {
   allowWeekends: boolean;
   timePreference: string;
   minNoticeHours: number;
+  googleCalendarId: string; // Admin-selected calendar for creating events
 }
 
 const initialFormData: FormData = {
@@ -68,6 +69,7 @@ const initialFormData: FormData = {
   allowWeekends: false,
   timePreference: "None",
   minNoticeHours: 24,
+  googleCalendarId: "", // Will be set when admin selects a calendar
 };
 
 export default function RequestNew() {
@@ -148,8 +150,7 @@ export default function RequestNew() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      // Create meeting - explicitly select only id (no joins to users)
-      // IMPORTANT: Set created_by_user_id to null to avoid RLS policy querying public.users
+      // Create meeting - persist admin creator and selected calendar for downstream Google event creation
       const { data: meeting, error: meetingError } = await supabase
         .from("meetings")
         .insert({
@@ -173,7 +174,9 @@ export default function RequestNew() {
           },
           search_window_days_used: formData.searchWindowDays,
           status: "Proposed",
-          created_by_user_id: null, // Set to null to avoid users table lookup in RLS
+          // Store admin creator and selected calendar for Google event creation at confirm time
+          created_by_user_id: internalUser?.id || null,
+          google_calendar_id: formData.googleCalendarId || null,
         })
         .select("id")
         .single();

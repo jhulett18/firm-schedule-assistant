@@ -24,6 +24,8 @@ interface MeetingDetails {
   external_attendees: { name?: string; email?: string; phone?: string }[];
   timezone: string;
   host_attorney_user_id: string | null;
+  created_by_user_id: string | null; // Admin who created the booking request
+  google_calendar_id: string | null; // Admin-selected calendar for creating events
   meeting_type_id: string | null;
   room_id: string | null;
   booking_request_id: string | null;
@@ -185,14 +187,15 @@ async function writeLog(
 }
 
 
-// Helper to create/update Google Calendar event with room resource
-async function createGoogleCalendarEventWithRoom(
+// Helper to create Google Calendar event on the ADMIN's selected calendar
+// Returns the created event ID for persistence
+async function createGoogleCalendarEvent(
   supabase: any,
   meeting: MeetingDetails,
   hostAttorney: { name: string; email: string } | null,
   startDatetime: string,
   endDatetime: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; eventId?: string; error?: string }> {
   const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
   const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
 
@@ -200,20 +203,24 @@ async function createGoogleCalendarEventWithRoom(
     return { success: false, error: "Google OAuth not configured" };
   }
 
-  if (!meeting.host_attorney_user_id) {
-    return { success: false, error: "No host attorney assigned" };
+  // Use the admin who created the booking request (created_by_user_id)
+  if (!meeting.created_by_user_id) {
+    return { success: false, error: "No admin creator assigned to meeting" };
   }
 
-  // Get Google calendar connection for the host attorney
+  // Use the admin-selected calendar ID, or fallback to "primary"
+  const targetCalendarId = meeting.google_calendar_id || "primary";
+
+  // Get Google calendar connection for the ADMIN who created the booking request
   const { data: calendarConnection } = await supabase
     .from("calendar_connections")
     .select("*")
     .eq("provider", "google")
-    .eq("user_id", meeting.host_attorney_user_id)
+    .eq("user_id", meeting.created_by_user_id)
     .maybeSingle();
 
   if (!calendarConnection) {
-    return { success: false, error: "No Google calendar connection for host attorney" };
+    return { success: false, error: "No Google calendar connection for admin user" };
   }
 
   let accessToken = calendarConnection.access_token;
@@ -254,27 +261,37 @@ async function createGoogleCalendarEventWithRoom(
       .eq("id", calendarConnection.id);
   }
 
-  // Build attendees list including room resource
+  // Build attendees list
   const attendees: { email: string; resource?: boolean }[] = [];
   
+  // Add host attorney as attendee
   if (hostAttorney?.email) {
     attendees.push({ email: hostAttorney.email });
   }
 
-  // Add external attendees
+  // Add external attendees (client)
   for (const ext of meeting.external_attendees || []) {
     if (ext.email) {
       attendees.push({ email: ext.email });
     }
   }
 
-  // Add room as a resource attendee
-  if (meeting.rooms?.resource_email) {
+  // Add room as a resource attendee ONLY if InPerson and room has resource_email
+  if (meeting.location_mode === "InPerson" && meeting.rooms?.resource_email) {
     attendees.push({ email: meeting.rooms.resource_email, resource: true });
   }
 
   const client = meeting.external_attendees?.[0];
   const eventSummary = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+
+  // Build description based on location mode
+  const descriptionParts = [
+    `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
+    `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || "In Person") : "Zoom"}`,
+  ];
+  if (meeting.location_mode === "InPerson" && meeting.rooms?.name) {
+    descriptionParts.push(`Room: ${meeting.rooms.name}`);
+  }
 
   const eventBody = {
     summary: eventSummary,
@@ -287,13 +304,14 @@ async function createGoogleCalendarEventWithRoom(
       timeZone: meeting.timezone,
     },
     attendees,
-    description: `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}\nRoom: ${meeting.rooms?.name || "N/A"}`,
+    description: descriptionParts.join("\n"),
   };
 
-  console.log("Creating Google Calendar event with room:", JSON.stringify(eventBody));
+  console.log(`Creating Google Calendar event on calendar: ${targetCalendarId}`, JSON.stringify(eventBody));
 
+  // Use the admin-selected calendar ID instead of "primary"
   const calendarResponse = await fetch(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all",
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCalendarId)}/events?sendUpdates=all`,
     {
       method: "POST",
       headers: {
@@ -311,8 +329,8 @@ async function createGoogleCalendarEventWithRoom(
   }
 
   const eventData = await calendarResponse.json();
-  console.log("Google Calendar event created:", eventData.id);
-  return { success: true };
+  console.log("Google Calendar event created:", eventData.id, "on calendar:", targetCalendarId);
+  return { success: true, eventId: eventData.id };
 }
 
 serve(async (req) => {
@@ -543,11 +561,15 @@ serve(async (req) => {
         .eq("id", meeting.id);
     }
 
-    // 8. If DirectCalendar mode and room is assigned, create calendar event with room
-    let calendarRoomReservationResult: { success: boolean; error?: string } | null = null;
-    if (roomReservationMode === "DirectCalendar" && meeting.room_id && meeting.rooms?.resource_email) {
-      console.log("DirectCalendar mode enabled, creating calendar event with room resource");
-      calendarRoomReservationResult = await createGoogleCalendarEventWithRoom(
+    // 8. ALWAYS create Google Calendar event on admin's selected calendar
+    // (if admin has a Google connection and meeting has created_by_user_id)
+    let googleResult: { success: boolean; eventId?: string; error?: string } | null = null;
+    let googleWarning: string | null = null;
+
+    if (meeting.created_by_user_id) {
+      console.log("Attempting Google Calendar event creation for admin user:", meeting.created_by_user_id, "on calendar:", meeting.google_calendar_id || "primary");
+      
+      googleResult = await createGoogleCalendarEvent(
         supabase,
         meeting as unknown as MeetingDetails,
         hostAttorney,
@@ -555,11 +577,34 @@ serve(async (req) => {
         endDatetime
       );
       
-      if (!calendarRoomReservationResult.success) {
-        console.warn("Room calendar reservation failed (non-fatal):", calendarRoomReservationResult.error);
+      if (!googleResult.success) {
+        console.warn("Google Calendar event creation failed (non-fatal):", googleResult.error);
+        googleWarning = googleResult.error || "Unknown Google Calendar error";
       } else {
-        console.log("Room calendar reservation successful");
+        console.log("Google Calendar event created successfully:", googleResult.eventId);
+        
+        // Persist google_event_id to meeting
+        if (googleResult.eventId) {
+          await supabase
+            .from("meetings")
+            .update({ 
+              google_event_id: googleResult.eventId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", meeting.id);
+        }
       }
+    } else {
+      console.log("Skipping Google Calendar event - no created_by_user_id on meeting");
+    }
+
+    // Build warnings array for response
+    const warnings: { system: string; message: string }[] = [];
+    if (lawmaticsError && lawmaticsConnection) {
+      warnings.push({ system: "lawmatics", message: lawmaticsError });
+    }
+    if (googleWarning) {
+      warnings.push({ system: "google", message: googleWarning });
     }
 
     // 9. Log success audit
@@ -574,7 +619,10 @@ serve(async (req) => {
         lawmatics_event_type_id: meeting.meeting_types?.lawmatics_event_type_id || null,
         lawmatics_location_id: meeting.rooms?.lawmatics_location_id || null,
         room_reservation_mode: roomReservationMode,
-        room_calendar_reserved: calendarRoomReservationResult?.success ?? null,
+        google_event_id: googleResult?.eventId ?? null,
+        google_calendar_id: meeting.google_calendar_id ?? null,
+        google_calendar_success: googleResult?.success ?? null,
+        google_calendar_error: googleWarning,
       },
     });
 
@@ -584,6 +632,8 @@ serve(async (req) => {
       success: true,
       meetingId: meeting.id,
       lawmaticsAppointmentId,
+      googleEventId: googleResult?.eventId ?? null,
+      warnings: warnings.length > 0 ? warnings : undefined,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
