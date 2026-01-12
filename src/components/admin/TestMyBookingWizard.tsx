@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import { 
   Calendar, 
@@ -24,6 +25,7 @@ import {
   Loader2, 
   ChevronLeft, 
   ChevronRight,
+  ChevronDown,
   AlertCircle,
   TestTube,
   Terminal,
@@ -34,6 +36,72 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { copyToClipboard } from "@/lib/clipboard";
+
+// ========== EFFECTIVE STATUS HELPER (UI-ONLY) ==========
+type EffectiveStatusTone = "success" | "warning" | "error";
+
+interface EffectiveLawmaticsStatus {
+  label: string;
+  tone: EffectiveStatusTone;
+  subtitle: string;
+}
+
+function getEffectiveLawmaticsStatus(result: any): EffectiveLawmaticsStatus {
+  if (!result) {
+    return { label: "Unknown", tone: "error", subtitle: "No result data available." };
+  }
+
+  const readback = result.lawmaticsReadback || result.lawmatics?.readback;
+  const hasId = !!result.lawmaticsAppointmentId;
+  
+  // Check if times persisted in readback
+  const hasPersistedTime = readback && (
+    (readback.starts_at && readback.ends_at) ||
+    (readback.start_time && readback.end_time)
+  );
+
+  if (hasId && hasPersistedTime) {
+    return {
+      label: "Created",
+      tone: "success",
+      subtitle: "Appointment created in Lawmatics."
+    };
+  }
+
+  if (hasId && !hasPersistedTime) {
+    return {
+      label: "Created (incomplete)",
+      tone: "warning",
+      subtitle: "Created, but Lawmatics did not persist time fields. Check details."
+    };
+  }
+
+  // No ID - check if lawmatics errors exist
+  const hasLawmaticsError = result.errors?.some((e: any) => e.system === "lawmatics");
+  if (hasLawmaticsError) {
+    return {
+      label: "Not created",
+      tone: "error",
+      subtitle: "Could not create Lawmatics appointment. See details."
+    };
+  }
+
+  return {
+    label: "Not created",
+    tone: "error",
+    subtitle: "Lawmatics appointment was not created."
+  };
+}
+
+// ========== LOG ICON HELPER ==========
+function getLogIcon(level: string) {
+  switch (level) {
+    case "success": return <CheckCircle className="h-4 w-4 text-green-500" />;
+    case "error": return <XCircle className="h-4 w-4 text-destructive" />;
+    case "warn": return <AlertCircle className="h-4 w-4 text-yellow-500" />;
+    default: return <Terminal className="h-4 w-4 text-muted-foreground" />;
+  }
+}
 
 // ========== STATE MACHINE ==========
 type FlowState = 
@@ -872,15 +940,6 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
     onOpenChange(false);
   };
   
-  const getLogIcon = (level: string) => {
-    switch (level) {
-      case "success": return <CheckCircle className="h-4 w-4 text-green-500" />;
-      case "error": return <XCircle className="h-4 w-4 text-destructive" />;
-      case "warn": return <AlertCircle className="h-4 w-4 text-yellow-500" />;
-      default: return <Terminal className="h-4 w-4 text-muted-foreground" />;
-    }
-  };
-  
   const selectedMeetingType = meetingTypes?.find((mt) => mt.id === selectedMeetingTypeId);
   const selectedRoom = rooms?.find((r) => r.id === selectedRoomId);
   const selectedCalendar = calendars.find((c) => c.id === selectedCalendarId);
@@ -1299,225 +1358,324 @@ export function TestMyBookingWizard({ open, onOpenChange }: TestMyBookingWizardP
           
           {/* Step 6: Done */}
           {currentStep === "done" && (
-            <div className="space-y-4 py-4">
-              {/* Header with appropriate icon */}
-              <div className="text-center py-4">
-                {bookingResult?.hasErrors || !bookingResult?.lawmaticsAppointmentId || bookingResult?.lawmaticsIsValid === false ? (
-                  <>
-                    <AlertCircle className="h-12 w-12 mx-auto text-yellow-500 mb-4" />
-                    <h3 className="text-lg font-semibold">Test Booking Completed with Warnings</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Some integrations may have issues. See details below.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle className="h-12 w-12 mx-auto text-green-500 mb-4" />
-                    <h3 className="text-lg font-semibold">Test Booking Complete!</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Check your Lawmatics and Google Calendar for the [TEST] marked entries.
-                    </p>
-                  </>
-                )}
-              </div>
-              
-              {bookingResult && (
-                <Card className={bookingResult.hasErrors || !bookingResult.lawmaticsAppointmentId || bookingResult.lawmaticsIsValid === false ? "border-yellow-500" : ""}>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Integration Results</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-sm space-y-3">
-                    {/* Google Calendar Status */}
-                    <div className="flex items-center gap-2">
-                      {bookingResult.googleEventId ? (
-                        <>
-                          <CheckCircle className="h-4 w-4 text-green-500" />
-                          <span className="font-medium">Google Calendar:</span>
-                          <span className="text-green-600">Created</span>
-                          <span className="text-muted-foreground text-xs">({bookingResult.googleEventId})</span>
-                        </>
-                      ) : (
-                        <>
-                          <XCircle className="h-4 w-4 text-destructive" />
-                          <span className="font-medium">Google Calendar:</span>
-                          <span className="text-destructive">Failed</span>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Lawmatics Status */}
-                    <div className="space-y-2">
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-2">
-                          {bookingResult.lawmaticsAppointmentId ? (
-                            bookingResult.lawmaticsIsValid ? (
-                              <>
-                                <CheckCircle className="h-4 w-4 text-green-500" />
-                                <span className="font-medium">Lawmatics:</span>
-                                <span className="text-green-600">Created</span>
-                                <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
-                              </>
-                            ) : (
-                              <>
-                                <AlertCircle className="h-4 w-4 text-yellow-500" />
-                                <span className="font-medium">Lawmatics:</span>
-                                <span className="text-yellow-600">Created (incomplete)</span>
-                                <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
-                              </>
-                            )
-                          ) : (
-                            <>
-                              <XCircle className="h-4 w-4 text-destructive" />
-                              <span className="font-medium">Lawmatics:</span>
-                              <span className="text-destructive">Failed</span>
-                            </>
-                          )}
-                        </div>
-
-                        {bookingResult.lawmaticsAppointmentId && bookingResult.lawmaticsIsValid === false && (
-                          <div className="text-xs text-yellow-600 ml-6 space-y-1">
-                            <p>Missing: {(bookingResult.lawmatics?.missingFields || []).join(", ") || "(unknown)"}</p>
-                            {bookingResult.lawmatics?.winningVariant && (
-                              <p className="text-muted-foreground">Variant used: {bookingResult.lawmatics.winningVariant}</p>
-                            )}
-                          </div>
-                        )}
-                        {bookingResult.lawmatics?.attemptedVariants?.length > 0 && (
-                          <details className="mt-2 text-xs">
-                            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                              View Attempted Variants ({bookingResult.lawmatics.attemptedVariants.length})
-                            </summary>
-                            <div className="mt-2 p-2 bg-muted rounded text-xs font-mono">
-                              {bookingResult.lawmatics.attemptedVariants.map((v: string, i: number) => (
-                                <div key={i} className={v === bookingResult.lawmatics?.winningVariant ? "text-green-600 font-medium" : ""}>
-                                  {v}{v === bookingResult.lawmatics?.winningVariant ? " ✓" : ""}
-                                </div>
-                              ))}
-                            </div>
-                          </details>
-                        )}
-                      </div>
-
-                      {/* Payload we attempted (computed times) */}
-                      {bookingResult.lawmatics?.payloadComputed && (
-                        <details className="mt-2 text-xs">
-                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                            View Lawmatics Payload (computed)
-                          </summary>
-                          <div className="mt-2 p-3 bg-muted rounded-lg">
-                            <pre className="overflow-x-auto whitespace-pre-wrap break-words">
-{JSON.stringify(bookingResult.lawmatics.payloadComputed, null, 2)}
-                            </pre>
-                          </div>
-                        </details>
-                      )}
-
-                      {/* Lawmatics Readback Panel */}
-                      {(bookingResult.lawmaticsReadback || bookingResult.lawmatics?.readback) && (
-                        <details className="mt-2 text-xs">
-                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                            View Lawmatics Readback (verified data)
-                          </summary>
-                          <div className="mt-2 p-3 bg-muted rounded-lg">
-                            <pre className="overflow-x-auto whitespace-pre-wrap break-words">
-{JSON.stringify(bookingResult.lawmaticsReadback || bookingResult.lawmatics?.readback, null, 2)}
-                            </pre>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="mt-2"
-                              onClick={async () => {
-                                const rb = bookingResult.lawmaticsReadback || bookingResult.lawmatics?.readback;
-                                const success = await copyToClipboard(JSON.stringify(rb, null, 2));
-                                if (success) toast.success("Lawmatics readback copied");
-                              }}
-                            >
-                              <Copy className="h-3 w-3 mr-1" /> Copy Readback
-                            </Button>
-                          </div>
-                        </details>
-                      )}
-                    </div>
-                  
-                    {/* Error Details */}
-                    {bookingResult.errors?.length > 0 && (
-                      <div className="mt-3 p-3 bg-destructive/10 rounded-lg space-y-2">
-                        <p className="font-medium text-destructive text-xs">Error Details:</p>
-                        {bookingResult.errors.map((err: any, idx: number) => (
-                          <div key={idx} className="text-xs space-y-1">
-                            <p><strong>{err.system}:</strong> {err.message}</p>
-                            {err.status && <p className="text-muted-foreground">Status: {err.status}</p>}
-                            {err.responseExcerpt && (
-                              <pre className="text-xs bg-muted p-2 rounded overflow-x-auto max-h-20">
-                                {err.responseExcerpt}
-                              </pre>
-                            )}
-                          </div>
-                        ))}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="mt-2"
-                          onClick={async () => {
-                            const success = await copyToClipboard(JSON.stringify(bookingResult.errors, null, 2));
-                            if (success) toast.success("Error details copied");
-                          }}
-                        >
-                          <Copy className="h-3 w-3 mr-1" /> Copy Error Details
-                        </Button>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-              
-              {/* Show final logs */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm flex items-center justify-between">
-                    <span className="flex items-center gap-2">
-                      <Terminal className="h-4 w-4" />
-                      Execution Log ({clientLogs.length} entries)
-                    </span>
-                    <Button variant="ghost" size="sm" onClick={handleCopyLogs}>
-                      <Copy className="h-3 w-3 mr-1" /> Copy Logs
-                    </Button>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ScrollArea className="h-[200px]">
-                    <div className="space-y-2 pr-4 font-mono text-xs">
-                      {clientLogs.length === 0 ? (
-                        <p className="text-muted-foreground">No logs recorded</p>
-                      ) : (
-                        clientLogs.map((log, idx) => (
-                          <div key={idx} className="flex items-start gap-2">
-                            {getLogIcon(log.level)}
-                            <span className="text-muted-foreground shrink-0">
-                              {format(new Date(log.ts), "HH:mm:ss")}
-                            </span>
-                            <span className={log.level === "error" ? "text-destructive" : log.level === "success" ? "text-green-500" : log.level === "warn" ? "text-yellow-600" : ""}>
-                              {log.message}
-                            </span>
-                          </div>
-                        ))
-                      )}
-                      <div ref={logsEndRef} />
-                    </div>
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-              
-              <div className="flex justify-end pt-4 gap-2">
-                <Button variant="outline" onClick={handleReset}>
-                  <RotateCcw className="h-4 w-4 mr-1" /> Test Again
-                </Button>
-                <Button onClick={handleClose}>Close</Button>
-              </div>
-            </div>
+            <DoneStep
+              bookingResult={bookingResult}
+              clientLogs={clientLogs}
+              logsEndRef={logsEndRef}
+              handleCopyLogs={handleCopyLogs}
+              handleReset={handleReset}
+              handleClose={handleClose}
+            />
           )}
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ========== DONE STEP COMPONENT ==========
+interface DoneStepProps {
+  bookingResult: any;
+  clientLogs: LogEntry[];
+  logsEndRef: React.RefObject<HTMLDivElement>;
+  handleCopyLogs: () => Promise<void>;
+  handleReset: () => void;
+  handleClose: () => void;
+}
+
+function DoneStep({ 
+  bookingResult, 
+  clientLogs, 
+  logsEndRef, 
+  handleCopyLogs, 
+  handleReset, 
+  handleClose 
+}: DoneStepProps) {
+  const [debugOpen, setDebugOpen] = useState(false);
+  
+  // Compute effective status for Lawmatics (UI-only logic)
+  const lawmaticsStatus = useMemo(() => getEffectiveLawmaticsStatus(bookingResult), [bookingResult]);
+  const googleCreated = !!bookingResult?.googleEventId;
+  
+  // Determine overall banner status
+  const overallSuccess = googleCreated && lawmaticsStatus.tone === "success";
+  const overallWarning = lawmaticsStatus.tone === "warning" || (!googleCreated && lawmaticsStatus.tone === "success");
+  const overallError = !googleCreated && lawmaticsStatus.tone === "error";
+
+  // Get log display class - downgrade "warn" to "info" if effective status is success
+  const getLogDisplayClass = (log: LogEntry) => {
+    // If the log is "completed with warnings" but effective status is success, show as neutral
+    if (log.level === "warn" && log.message.includes("completed with warnings") && lawmaticsStatus.tone === "success") {
+      return ""; // neutral/info color
+    }
+    if (log.level === "error") return "text-destructive";
+    if (log.level === "success") return "text-green-500";
+    if (log.level === "warn") return "text-yellow-600";
+    return "";
+  };
+
+  return (
+    <div className="space-y-4 py-4">
+      {/* Main Banner - based on effective status */}
+      <div className="text-center py-4">
+        {overallError ? (
+          <>
+            <XCircle className="h-12 w-12 mx-auto text-destructive mb-4" />
+            <h3 className="text-lg font-semibold">Test Booking Failed</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              One or more integrations failed. See details below.
+            </p>
+          </>
+        ) : overallWarning ? (
+          <>
+            <AlertCircle className="h-12 w-12 mx-auto text-yellow-500 mb-4" />
+            <h3 className="text-lg font-semibold">Test Booking Completed with Warnings</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              {!googleCreated ? "Google Calendar failed. " : ""}
+              {lawmaticsStatus.tone === "warning" ? lawmaticsStatus.subtitle : ""}
+            </p>
+          </>
+        ) : (
+          <>
+            <CheckCircle className="h-12 w-12 mx-auto text-green-500 mb-4" />
+            <h3 className="text-lg font-semibold">Test Booking Complete!</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              Google Calendar created. Lawmatics appointment created.
+            </p>
+          </>
+        )}
+      </div>
+      
+      {/* Integration Results Card */}
+      {bookingResult && (
+        <Card className={overallError ? "border-destructive" : overallWarning ? "border-yellow-500" : "border-green-500"}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Integration Results</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm space-y-3">
+            {/* Google Calendar Status */}
+            <div className="flex items-center gap-2">
+              {googleCreated ? (
+                <>
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span className="font-medium">Google Calendar:</span>
+                  <span className="text-green-600">Created</span>
+                  <span className="text-muted-foreground text-xs">({bookingResult.googleEventId})</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-4 w-4 text-destructive" />
+                  <span className="font-medium">Google Calendar:</span>
+                  <span className="text-destructive">Failed</span>
+                </>
+              )}
+            </div>
+
+            {/* Lawmatics Status - using effective status */}
+            <div className="flex items-center gap-2">
+              {lawmaticsStatus.tone === "success" ? (
+                <>
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span className="font-medium">Lawmatics:</span>
+                  <span className="text-green-600">{lawmaticsStatus.label}</span>
+                  {bookingResult.lawmaticsAppointmentId && (
+                    <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
+                  )}
+                </>
+              ) : lawmaticsStatus.tone === "warning" ? (
+                <>
+                  <AlertCircle className="h-4 w-4 text-yellow-500" />
+                  <span className="font-medium">Lawmatics:</span>
+                  <span className="text-yellow-600">{lawmaticsStatus.label}</span>
+                  {bookingResult.lawmaticsAppointmentId && (
+                    <span className="text-muted-foreground text-xs">({bookingResult.lawmaticsAppointmentId})</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-4 w-4 text-destructive" />
+                  <span className="font-medium">Lawmatics:</span>
+                  <span className="text-destructive">{lawmaticsStatus.label}</span>
+                </>
+              )}
+            </div>
+            
+            {/* Subtitle for warnings */}
+            {lawmaticsStatus.tone === "warning" && (
+              <p className="text-xs text-yellow-600 ml-6">{lawmaticsStatus.subtitle}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      
+      {/* Collapsible Debug Details */}
+      <Collapsible open={debugOpen} onOpenChange={setDebugOpen}>
+        <Card>
+          <CollapsibleTrigger asChild>
+            <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
+              <CardTitle className="text-sm flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <Bug className="h-4 w-4" />
+                  Details (debug)
+                </span>
+                <ChevronDown className={`h-4 w-4 transition-transform ${debugOpen ? "rotate-180" : ""}`} />
+              </CardTitle>
+            </CardHeader>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <CardContent className="text-sm space-y-4 pt-0">
+              {/* hasErrors flag */}
+              {bookingResult && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-medium">hasErrors:</span>
+                  <Badge variant={bookingResult.hasErrors ? "destructive" : "secondary"}>
+                    {String(bookingResult.hasErrors)}
+                  </Badge>
+                </div>
+              )}
+              
+              {/* Error Details */}
+              {bookingResult?.errors?.length > 0 && (
+                <div className="p-3 bg-destructive/10 rounded-lg space-y-2">
+                  <p className="font-medium text-destructive text-xs">Raw Errors ({bookingResult.errors.length}):</p>
+                  {bookingResult.errors.map((err: any, idx: number) => (
+                    <div key={idx} className="text-xs space-y-1">
+                      <p><strong>{err.system}:</strong> {err.message}</p>
+                      {err.status && <p className="text-muted-foreground">Status: {err.status}</p>}
+                      {err.responseExcerpt && (
+                        <pre className="text-xs bg-muted p-2 rounded overflow-x-auto max-h-20">
+                          {err.responseExcerpt}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Attempted Variants */}
+              {bookingResult?.lawmatics?.attemptedVariants?.length > 0 && (
+                <div className="space-y-2">
+                  <p className="font-medium text-xs">Attempted Variants ({bookingResult.lawmatics.attemptedVariants.length}):</p>
+                  <div className="p-2 bg-muted rounded text-xs font-mono">
+                    {bookingResult.lawmatics.attemptedVariants.map((v: string, i: number) => (
+                      <div key={i} className={v === bookingResult.lawmatics?.winningVariant ? "text-green-600 font-medium" : ""}>
+                        {v}{v === bookingResult.lawmatics?.winningVariant ? " ✓" : ""}
+                      </div>
+                    ))}
+                  </div>
+                  {bookingResult.lawmatics?.winningVariant && (
+                    <p className="text-xs text-muted-foreground">Winning variant: <span className="text-green-600 font-medium">{bookingResult.lawmatics.winningVariant}</span></p>
+                  )}
+                </div>
+              )}
+
+              {/* Lawmatics Readback */}
+              {(bookingResult?.lawmaticsReadback || bookingResult?.lawmatics?.readback) && (
+                <div className="space-y-2">
+                  <p className="font-medium text-xs">Lawmatics Readback:</p>
+                  <div className="p-3 bg-muted rounded-lg">
+                    <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs">
+{JSON.stringify(bookingResult.lawmaticsReadback || bookingResult.lawmatics?.readback, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {/* Payload Computed */}
+              {bookingResult?.lawmatics?.payloadComputed && (
+                <div className="space-y-2">
+                  <p className="font-medium text-xs">Payload Computed:</p>
+                  <div className="p-3 bg-muted rounded-lg">
+                    <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs">
+{JSON.stringify(bookingResult.lawmatics.payloadComputed, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {/* Copy Debug JSON Button */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={async () => {
+                  const debugData = {
+                    hasErrors: bookingResult?.hasErrors,
+                    errors: bookingResult?.errors,
+                    lawmaticsReadback: bookingResult?.lawmaticsReadback || bookingResult?.lawmatics?.readback,
+                    attemptedVariants: bookingResult?.lawmatics?.attemptedVariants,
+                    winningVariant: bookingResult?.lawmatics?.winningVariant,
+                    payloadComputed: bookingResult?.lawmatics?.payloadComputed,
+                    googleEventId: bookingResult?.googleEventId,
+                    lawmaticsAppointmentId: bookingResult?.lawmaticsAppointmentId,
+                  };
+                  const success = await copyToClipboard(JSON.stringify(debugData, null, 2));
+                  if (success) toast.success("Debug JSON copied to clipboard");
+                }}
+              >
+                <Copy className="h-3 w-3 mr-1" /> Copy Debug JSON
+              </Button>
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
+      
+      {/* Execution Log - collapsed by default, uses adjusted colors */}
+      <Collapsible>
+        <Card>
+          <CollapsibleTrigger asChild>
+            <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
+              <CardTitle className="text-sm flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <Terminal className="h-4 w-4" />
+                  Execution Log ({clientLogs.length} entries)
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={(e) => { e.stopPropagation(); handleCopyLogs(); }}
+                  >
+                    <Copy className="h-3 w-3 mr-1" /> Copy
+                  </Button>
+                  <ChevronDown className="h-4 w-4" />
+                </div>
+              </CardTitle>
+            </CardHeader>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <CardContent className="pt-0">
+              <ScrollArea className="h-[200px]">
+                <div className="space-y-2 pr-4 font-mono text-xs">
+                  {clientLogs.length === 0 ? (
+                    <p className="text-muted-foreground">No logs recorded</p>
+                  ) : (
+                    clientLogs.map((log, idx) => (
+                      <div key={idx} className="flex items-start gap-2">
+                        {getLogIcon(log.level)}
+                        <span className="text-muted-foreground shrink-0">
+                          {format(new Date(log.ts), "HH:mm:ss")}
+                        </span>
+                        <span className={getLogDisplayClass(log)}>
+                          {log.message}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                  <div ref={logsEndRef} />
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
+      
+      <div className="flex justify-end pt-4 gap-2">
+        <Button variant="outline" onClick={handleReset}>
+          <RotateCcw className="h-4 w-4 mr-1" /> Test Again
+        </Button>
+        <Button onClick={handleClose}>Close</Button>
+      </div>
+    </div>
   );
 }
