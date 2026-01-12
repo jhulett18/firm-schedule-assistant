@@ -510,35 +510,26 @@ serve(async (req) => {
       console.log("No Lawmatics connection configured");
     }
 
-    // 6. Handle Lawmatics result
+    // 6. Handle Lawmatics result - DO NOT BLOCK CLIENT on Lawmatics failure
+    // The meeting is already marked as Booked (step 3), so the client booking is complete.
+    // Log a warning for staff to review, but let the client see success.
     if (lawmaticsError && lawmaticsConnection) {
-      // Only fail if we had a connection but the API call failed
-      // Set meeting status to Failed
-      await supabase
-        .from("meetings")
-        .update({ status: "Failed", updated_at: new Date().toISOString() })
-        .eq("id", meeting.id);
-
-      // Log audit record
+      console.warn("Lawmatics sync failed (non-blocking):", lawmaticsError);
+      
+      // Log audit record for staff to review - but do NOT change meeting status to Failed
       await supabase.from("audit_logs").insert({
         action_type: "Failed",
         meeting_id: meeting.id,
         details_json: {
-          error: lawmaticsError,
+          warning: "Lawmatics sync failed but booking was completed successfully",
+          lawmatics_error: lawmaticsError,
           attempted_at: new Date().toISOString(),
           start_datetime: startDatetime,
           end_datetime: endDatetime,
+          note: "Staff should manually create appointment in Lawmatics if needed",
         },
       });
-
-      return new Response(JSON.stringify({ 
-        success: false,
-        error: "We were unable to complete your booking. Please contact us directly to schedule your meeting.",
-        meetingId: meeting.id,
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      // Continue to success response - do NOT return 500
     }
 
     // 7. Store Lawmatics appointment ID if returned
