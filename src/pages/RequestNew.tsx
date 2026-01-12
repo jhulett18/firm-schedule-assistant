@@ -148,7 +148,7 @@ export default function RequestNew() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      // Create meeting
+      // Create meeting - explicitly select only needed columns (no joins to users)
       const { data: meeting, error: meetingError } = await supabase
         .from("meetings")
         .insert({
@@ -174,12 +174,12 @@ export default function RequestNew() {
           status: "Proposed",
           created_by_user_id: internalUser?.id || null,
         })
-        .select()
+        .select("id")
         .single();
 
       if (meetingError) throw meetingError;
 
-      // Create booking request
+      // Create booking request - explicitly select only needed columns
       const expiresAt = addDays(new Date(), 7);
       const { data: bookingRequest, error: brError } = await supabase
         .from("booking_requests")
@@ -188,7 +188,7 @@ export default function RequestNew() {
           expires_at: expiresAt.toISOString(),
           status: "Open",
         })
-        .select()
+        .select("id, public_token, meeting_id")
         .single();
 
       if (brError) throw brError;
@@ -200,8 +200,14 @@ export default function RequestNew() {
       queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
       queryClient.invalidateQueries({ queryKey: ["recent-meetings"] });
     },
-    onError: (error) => {
-      toast.error(`Failed to create request: ${error.message}`);
+    onError: (error: Error) => {
+      // Improved error message for permission denied issues
+      const isUsersPermissionError = error.message?.toLowerCase().includes("permission denied for table user");
+      if (isUsersPermissionError) {
+        toast.error("Create Request failed due to restricted access. This is a UI query issue.");
+      } else {
+        toast.error(`Failed to create request: ${error.message}`);
+      }
     },
   });
 
