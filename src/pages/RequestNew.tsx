@@ -92,15 +92,28 @@ export default function RequestNew() {
     },
   });
 
-  // Fetch attorneys
+  // Fetch attorneys (users with admin role in user_roles table)
   const { data: attorneys } = useQuery({
-    queryKey: ["users-attorneys"],
+    queryKey: ["users-attorneys-admin"],
     queryFn: async () => {
+      // First get user IDs that have admin role
+      const { data: adminRoles, error: rolesError } = await supabase
+        .from("user_roles")
+        .select("user_id")
+        .eq("role", "admin");
+      
+      if (rolesError) throw rolesError;
+      if (!adminRoles || adminRoles.length === 0) return [];
+
+      const adminAuthIds = adminRoles.map((r) => r.user_id);
+      
+      // Then get users matching those auth_user_ids
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, role")
+        .select("id, name, email, role, auth_user_id")
         .eq("active", true)
-        .eq("role", "Attorney");
+        .in("auth_user_id", adminAuthIds);
+      
       if (error) throw error;
       return data || [];
     },
