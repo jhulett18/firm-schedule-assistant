@@ -3,17 +3,17 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Calendar, Clock, MapPin, Video, CheckCircle, RefreshCw } from "lucide-react";
+import { Calendar, Clock, MapPin, Video, CheckCircle, RefreshCw, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { LoadingState } from "@/components/public-booking/LoadingState";
 import { GuidedHelpPanel } from "@/components/public-booking/GuidedHelpPanel";
 import { NoAvailableTimesState } from "@/components/public-booking/NoAvailableTimesState";
-// AlreadyBookedState not used - inline implementation with debug button
 import { ExpiredOrCancelledState } from "@/components/public-booking/ExpiredOrCancelledState";
 import { ErrorState } from "@/components/public-booking/ErrorState";
 import { TimezoneSelector } from "@/components/public-booking/TimezoneSelector";
-import { LawmaticsDebugButton } from "@/components/public-booking/LawmaticsDebugPanel";
+import { ApiDebugButton, type ApiCall } from "@/components/public-booking/ApiDebugPanel";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const ACTIVE_BOOKING_TOKEN_KEY = 'ACTIVE_BOOKING_TOKEN';
 
@@ -47,13 +47,6 @@ interface ContactSettings {
   message?: string;
 }
 
-interface LawmaticsDebugData {
-  contact?: { attempted: boolean; endpoint?: string; status?: number; id?: string; body_excerpt?: string };
-  matter?: { attempted: boolean; endpoint?: string; status?: number; id?: string; body_excerpt?: string };
-  event?: { attempted: boolean; endpoint?: string; status?: number; id?: string; body_excerpt?: string };
-  timestamp?: string;
-}
-
 export default function Schedule() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -74,13 +67,39 @@ export default function Schedule() {
     Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York"
   );
   const [isRetrying, setIsRetrying] = useState(false);
-  const [lawmaticsDebug, setLawmaticsDebug] = useState<LawmaticsDebugData | null>(null);
+  
+  // API Debug state
+  const [apiCalls, setApiCalls] = useState<ApiCall[]>([]);
+  const [confirmWarnings, setConfirmWarnings] = useState<string[]>([]);
+
+  // Helper to record API calls
+  const recordApiCall = useCallback((call: Omit<ApiCall, 'id' | 'timestamp'>) => {
+    setApiCalls(prev => [...prev, {
+      ...call,
+      id: `api-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date(),
+    }]);
+  }, []);
 
   // Fetch booking info from edge function
   const fetchBookingInfo = useCallback(async (bookingToken: string) => {
+    const startTime = Date.now();
+    const requestBody = { token: bookingToken };
+    
     try {
       const { data, error } = await supabase.functions.invoke("public-booking-info", {
-        body: { token: bookingToken },
+        body: requestBody,
+      });
+
+      recordApiCall({
+        name: "public-booking-info",
+        request: { method: "POST", body: requestBody },
+        response: {
+          status: error ? 500 : 200,
+          body: data || undefined,
+        },
+        error: error?.message,
+        duration: Date.now() - startTime,
       });
 
       if (error) {
@@ -90,26 +109,31 @@ export default function Schedule() {
         return;
       }
 
-      if (data.error) {
+      // Safely access response properties
+      if (data?.error) {
         setErrorMessage(data.error);
         setCurrentState("error");
         return;
       }
 
-      setMeeting(data.meeting);
-      setContact(data.contact || {});
+      // Safely extract meeting data with fallbacks
+      if (data?.meeting) {
+        setMeeting(data.meeting);
+      }
+      setContact(data?.contact || {});
 
-      if (data.state === "already_booked") {
+      const state = data?.state;
+      if (state === "already_booked") {
         setCurrentState("already_booked");
         return;
       }
 
-      if (data.state === "expired") {
+      if (state === "expired") {
         setCurrentState("expired");
         return;
       }
 
-      if (data.state === "cancelled") {
+      if (state === "cancelled") {
         setCurrentState("cancelled");
         return;
       }
@@ -120,20 +144,37 @@ export default function Schedule() {
       
     } catch (err) {
       console.error("Error in fetchBookingInfo:", err);
+      recordApiCall({
+        name: "public-booking-info",
+        request: { method: "POST", body: requestBody },
+        error: err instanceof Error ? err.message : String(err),
+        duration: Date.now() - startTime,
+      });
       setErrorMessage("An unexpected error occurred");
       setCurrentState("error");
     }
-  }, []);
+  }, [recordApiCall]);
 
   // Fetch available slots from edge function
   const fetchAvailableSlots = async (bookingToken: string) => {
     setIsLoadingSlots(true);
+    const startTime = Date.now();
+    const requestBody = { token: bookingToken, clientTimezone };
+    
     try {
       const { data, error } = await supabase.functions.invoke("public-available-slots", {
-        body: { 
-          token: bookingToken,
-          clientTimezone,
+        body: requestBody,
+      });
+
+      recordApiCall({
+        name: "public-available-slots",
+        request: { method: "POST", body: requestBody },
+        response: {
+          status: error ? 500 : 200,
+          body: data || undefined,
         },
+        error: error?.message,
+        duration: Date.now() - startTime,
       });
 
       if (error) {
@@ -142,7 +183,8 @@ export default function Schedule() {
         return;
       }
 
-      const slots = data?.slots || [];
+      // Safely access slots with fallback
+      const slots = Array.isArray(data?.slots) ? data.slots : [];
       setAvailableSlots(slots);
       
       if (slots.length === 0) {
@@ -150,6 +192,12 @@ export default function Schedule() {
       }
     } catch (err) {
       console.error("Error fetching slots:", err);
+      recordApiCall({
+        name: "public-available-slots",
+        request: { method: "POST", body: requestBody },
+        error: err instanceof Error ? err.message : String(err),
+        duration: Date.now() - startTime,
+      });
       setAvailableSlots([]);
     } finally {
       setIsLoadingSlots(false);
@@ -188,31 +236,53 @@ export default function Schedule() {
     }
   };
 
-  // Confirm booking
+  // Confirm booking - ROBUST error handling
   const handleConfirmSlot = async () => {
     if (!selectedSlot || !token) return;
 
     setConfirming(true);
+    setConfirmWarnings([]);
+    const startTime = Date.now();
+    const requestBody = {
+      token,
+      startDatetime: selectedSlot.start,
+      endDatetime: selectedSlot.end,
+    };
 
     try {
       const { data, error: invokeError } = await supabase.functions.invoke("confirm-booking", {
-        body: {
-          token,
-          startDatetime: selectedSlot.start,
-          endDatetime: selectedSlot.end,
-        },
+        body: requestBody,
       });
 
+      // Record API call regardless of outcome
+      recordApiCall({
+        name: "confirm-booking",
+        request: { method: "POST", body: requestBody },
+        response: {
+          status: invokeError ? 500 : 200,
+          body: data || undefined,
+        },
+        error: invokeError?.message,
+        duration: Date.now() - startTime,
+      });
+
+      // Check for invoke-level error
       if (invokeError) {
         throw new Error(invokeError.message || "Failed to confirm booking");
       }
 
-      // Capture lawmatics debug data if present
-      if (data?.lawmatics_debug) {
-        setLawmaticsDebug(data.lawmatics_debug);
+      // Check if data exists at all
+      if (!data) {
+        throw new Error("Empty response from server");
       }
 
-      if (data?.success) {
+      // Capture warnings if present (array of strings)
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setConfirmWarnings(data.warnings);
+      }
+
+      // Check for success - be flexible about response shape
+      if (data.success === true) {
         // Update meeting state with confirmed times
         setMeeting(prev => prev ? {
           ...prev,
@@ -222,22 +292,46 @@ export default function Schedule() {
         
         toast({
           title: "Meeting Confirmed!",
-          description: "Your meeting has been scheduled successfully.",
+          description: data.warnings?.length 
+            ? "Your meeting is scheduled. Some integrations had warnings."
+            : "Your meeting has been scheduled successfully.",
         });
         
-        // Show the already_booked state with debug button instead of navigating away
+        // Show the already_booked state with debug button
         setCurrentState("already_booked");
-      } else if (data?.error) {
-        if (data.error.toLowerCase().includes("already")) {
+        return;
+      }
+
+      // Check for explicit error in response
+      if (data.error) {
+        if (typeof data.error === 'string' && data.error.toLowerCase().includes("already")) {
           setCurrentState("already_booked");
           return;
         }
         throw new Error(data.error);
-      } else {
-        throw new Error("Unexpected response from server");
       }
+
+      // Fallback - if success is not true and no error, something unexpected happened
+      if (data.success === false) {
+        throw new Error("Booking was not successful");
+      }
+
+      // If we got here with some data but no clear success/error, treat as unexpected
+      throw new Error("Unexpected response format from server");
+
     } catch (err: any) {
       console.error("Booking confirmation error:", err);
+      
+      // Record the error if not already recorded
+      if (!apiCalls.find(c => c.name === "confirm-booking" && Date.now() - c.timestamp.getTime() < 1000)) {
+        recordApiCall({
+          name: "confirm-booking",
+          request: { method: "POST", body: requestBody },
+          error: err.message || String(err),
+          duration: Date.now() - startTime,
+        });
+      }
+      
       setErrorMessage(err.message || "We were unable to complete your booking. Please contact us directly.");
       setCurrentState("error");
     } finally {
@@ -260,13 +354,24 @@ export default function Schedule() {
 
   if (currentState === "error") {
     return (
-      <ErrorState
-        message={errorMessage}
-        onRetry={handleRetry}
-        isRetrying={isRetrying}
-        contactEmail={contact.email}
-        contactPhone={contact.phone}
-      />
+      <div className="min-h-screen bg-background py-8 px-4">
+        <div className="max-w-lg mx-auto space-y-6">
+          <ErrorState
+            message={errorMessage}
+            onRetry={handleRetry}
+            isRetrying={isRetrying}
+            contactEmail={contact.email}
+            contactPhone={contact.phone}
+          />
+          
+          {/* Debug button always available on error */}
+          {apiCalls.length > 0 && (
+            <div className="flex justify-center">
+              <ApiDebugButton calls={apiCalls} hasWarnings />
+            </div>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -302,6 +407,23 @@ export default function Schedule() {
             </CardContent>
           </Card>
 
+          {/* Show warnings if any */}
+          {confirmWarnings.length > 0 && (
+            <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/20">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertDescription>
+                <p className="font-medium text-amber-800 dark:text-amber-200 mb-2">
+                  Booking confirmed with warnings:
+                </p>
+                <ul className="text-sm text-amber-700 dark:text-amber-300 space-y-1">
+                  {confirmWarnings.map((w, i) => (
+                    <li key={i} className="break-words">{w}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Meeting details */}
           <Card>
             <CardHeader className="pb-3">
@@ -328,10 +450,10 @@ export default function Schedule() {
             </CardContent>
           </Card>
           
-          {/* Debug button for staff to view Lawmatics integration details */}
-          {lawmaticsDebug && (
+          {/* Debug button */}
+          {apiCalls.length > 0 && (
             <div className="flex justify-center">
-              <LawmaticsDebugButton debug={lawmaticsDebug} />
+              <ApiDebugButton calls={apiCalls} hasWarnings={confirmWarnings.length > 0} />
             </div>
           )}
           
@@ -368,6 +490,13 @@ export default function Schedule() {
             contactPhone={contact.phone}
             contactMessage={contact.message}
           />
+          
+          {/* Debug button */}
+          {apiCalls.length > 0 && (
+            <div className="flex justify-center">
+              <ApiDebugButton calls={apiCalls} />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -501,6 +630,13 @@ export default function Schedule() {
           >
             {confirming ? "Confirming..." : "Confirm This Time"}
           </Button>
+        )}
+
+        {/* Debug button - always available for troubleshooting */}
+        {apiCalls.length > 0 && (
+          <div className="flex justify-center">
+            <ApiDebugButton calls={apiCalls} />
+          </div>
         )}
 
         {/* Back to Client View */}
