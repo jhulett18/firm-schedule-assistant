@@ -9,10 +9,11 @@ import { format } from "date-fns";
 import { LoadingState } from "@/components/public-booking/LoadingState";
 import { GuidedHelpPanel } from "@/components/public-booking/GuidedHelpPanel";
 import { NoAvailableTimesState } from "@/components/public-booking/NoAvailableTimesState";
-import { AlreadyBookedState } from "@/components/public-booking/AlreadyBookedState";
+// AlreadyBookedState not used - inline implementation with debug button
 import { ExpiredOrCancelledState } from "@/components/public-booking/ExpiredOrCancelledState";
 import { ErrorState } from "@/components/public-booking/ErrorState";
 import { TimezoneSelector } from "@/components/public-booking/TimezoneSelector";
+import { LawmaticsDebugButton } from "@/components/public-booking/LawmaticsDebugPanel";
 
 const ACTIVE_BOOKING_TOKEN_KEY = 'ACTIVE_BOOKING_TOKEN';
 
@@ -46,6 +47,13 @@ interface ContactSettings {
   message?: string;
 }
 
+interface LawmaticsDebugData {
+  contact?: { attempted: boolean; endpoint?: string; status?: number; id?: string; body_excerpt?: string };
+  matter?: { attempted: boolean; endpoint?: string; status?: number; id?: string; body_excerpt?: string };
+  event?: { attempted: boolean; endpoint?: string; status?: number; id?: string; body_excerpt?: string };
+  timestamp?: string;
+}
+
 export default function Schedule() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -66,6 +74,7 @@ export default function Schedule() {
     Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York"
   );
   const [isRetrying, setIsRetrying] = useState(false);
+  const [lawmaticsDebug, setLawmaticsDebug] = useState<LawmaticsDebugData | null>(null);
 
   // Fetch booking info from edge function
   const fetchBookingInfo = useCallback(async (bookingToken: string) => {
@@ -198,13 +207,26 @@ export default function Schedule() {
         throw new Error(invokeError.message || "Failed to confirm booking");
       }
 
+      // Capture lawmatics debug data if present
+      if (data?.lawmatics_debug) {
+        setLawmaticsDebug(data.lawmatics_debug);
+      }
+
       if (data?.success) {
-        // Clear the token and redirect to client view
+        // Update meeting state with confirmed times
+        setMeeting(prev => prev ? {
+          ...prev,
+          startDatetime: selectedSlot.start,
+          endDatetime: selectedSlot.end,
+        } : null);
+        
         toast({
           title: "Meeting Confirmed!",
           description: "Your meeting has been scheduled successfully.",
         });
-        navigate('/client');
+        
+        // Show the already_booked state with debug button instead of navigating away
+        setCurrentState("already_booked");
       } else if (data?.error) {
         if (data.error.toLowerCase().includes("already")) {
           setCurrentState("already_booked");
@@ -262,15 +284,65 @@ export default function Schedule() {
   if (currentState === "already_booked" && meeting) {
     const startDate = meeting.startDatetime ? new Date(meeting.startDatetime) : new Date();
     return (
-      <AlreadyBookedState
-        meetingTypeName={meeting.meetingTypeName}
-        startDatetime={startDate}
-        durationMinutes={meeting.durationMinutes}
-        locationMode={meeting.locationMode}
-        locationDisplay={getLocationDisplay()}
-        contactEmail={contact.email}
-        contactPhone={contact.phone}
-      />
+      <div className="min-h-screen bg-background py-8 px-4">
+        <div className="max-w-lg mx-auto space-y-6">
+          <Card className="border-green-200 bg-green-50/50 dark:border-green-900 dark:bg-green-950/20">
+            <CardContent className="pt-6">
+              <div className="flex flex-col items-center text-center gap-4">
+                <div className="h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center">
+                  <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-foreground mb-2">You're All Set!</h2>
+                  <p className="text-muted-foreground">
+                    Your meeting has been scheduled. We look forward to speaking with you.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Meeting details */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">{meeting.meetingTypeName}</CardTitle>
+              <CardDescription>Meeting Details</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-3 text-sm">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <span>{format(startDate, "EEEE, MMMM d, yyyy 'at' h:mm a")}</span>
+              </div>
+              <div className="flex items-center gap-3 text-sm">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <span>{meeting.durationMinutes} minutes</span>
+              </div>
+              <div className="flex items-center gap-3 text-sm">
+                {meeting.locationMode === "Zoom" ? (
+                  <Video className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <MapPin className="h-4 w-4 text-muted-foreground" />
+                )}
+                <span>{getLocationDisplay()}</span>
+              </div>
+            </CardContent>
+          </Card>
+          
+          {/* Debug button for staff to view Lawmatics integration details */}
+          {lawmaticsDebug && (
+            <div className="flex justify-center">
+              <LawmaticsDebugButton debug={lawmaticsDebug} />
+            </div>
+          )}
+          
+          {/* Back to Client View */}
+          <div className="text-center">
+            <Button variant="ghost" onClick={() => navigate('/client')}>
+              Back to My Appointments
+            </Button>
+          </div>
+        </div>
+      </div>
     );
   }
 
