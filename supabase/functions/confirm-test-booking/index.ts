@@ -968,15 +968,15 @@ serve(async (req) => {
       lawmaticsAppointmentId = appointment.createdId;
       lawmaticsReadback = appointment.readback;
       lawmaticsComplete = appointment.persisted;
-      lawmaticsUsedTimeFormat = appointment.usedTimeFormat;
+      lawmaticsUsedTimeFormat = appointment.usedTimeFormat ?? null;
       lawmaticsDebug = {
         timezoneUsed: appointment.timezoneUsed,
-        computed: {
+        computed: appointment.computed ? {
           start_date: appointment.computed.start_date,
           start_time: appointment.computed.start_time,
           end_date: appointment.computed.end_date,
           end_time: appointment.computed.end_time,
-        },
+        } : null,
         readback: appointment.readback,
       };
 

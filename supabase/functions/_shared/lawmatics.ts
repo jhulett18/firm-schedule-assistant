@@ -912,6 +912,16 @@ export interface AppointmentResult {
   persisted: boolean;
   readback: any;
   error?: string;
+  usedTimeFormat?: string;
+  timezoneUsed?: string;
+  ownerUserIdUsed?: number | null;
+  attempts?: Array<{ endpoint: string; method: string; status: number; body_excerpt: string }>;
+  computed?: {
+    start_date: string;
+    start_time: string;
+    end_date: string;
+    end_time: string;
+  };
 }
 
 type LogFn = (step: string, level: string, message: string, details?: Record<string, any>) => Promise<void>;

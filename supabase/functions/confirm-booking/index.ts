@@ -707,7 +707,7 @@ serve(async (req) => {
     let matterWarning: string | null = null;
     let matterSkipped = false;
     let matterSkipReason: string | null = null;
-    let matterAttempts: Array<{ endpoint: string; payload_shape: string; status: number; excerpt: string }> = [];
+    let matterAttempts: Array<{ endpoint: string; method: string; status: number; body_excerpt: string }> = [];
 
     // Get admin's matter attachment choice from booking request
     const matterMode = bookingRequest.lawmatics_matter_mode || "new";
@@ -809,9 +809,9 @@ serve(async (req) => {
           if (matterResult.attempts?.length) {
             matterAttempts = matterResult.attempts.map((a) => ({
               endpoint: a.endpoint,
-              payload_shape: a.payload_shape,
+              method: a.method,
               status: a.status,
-              excerpt: a.excerpt,
+              body_excerpt: a.body_excerpt,
             }));
           }
 
@@ -831,13 +831,11 @@ serve(async (req) => {
           } else {
             // Matter creation FAILED - but non-blocking
             const attemptDetails = matterAttempts
-              .map((a) => `${a.endpoint}[${a.payload_shape}](${a.status}): ${a.excerpt.slice(0, 120)}`)
+              .map((a) => `${a.endpoint}[${a.method}](${a.status}): ${a.body_excerpt.slice(0, 120)}`)
               .join("; ");
 
-            matterWarning = `Matter/Prospect creation failed: ${matterResult.error || "Unknown error"}. Attempts: ${attemptDetails}`;
-            if (matterResult.warnings?.length) {
-              matterWarning += ` | Details: ${matterResult.warnings.join("; ")}`;
-            }
+            const errorMsg = matterResult.warnings?.length ? matterResult.warnings.join("; ") : "Unknown error";
+            matterWarning = `Matter/Prospect creation failed: ${errorMsg}. Attempts: ${attemptDetails}`;
             console.warn("Lawmatics matter creation failed (non-blocking):", matterWarning);
           }
         } else {
