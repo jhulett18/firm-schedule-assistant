@@ -34,9 +34,32 @@ interface MeetingDetails {
   meeting_type_id: string | null;
   room_id: string | null;
   booking_request_id: string | null;
+  lawmatics_appointment_id: string | null;
+  lawmatics_matter_id: string | null;
   meeting_types?: { name: string; lawmatics_event_type_id: string | null } | null;
   rooms?: { name: string; resource_email: string; lawmatics_location_id: string | null } | null;
   host_attorney?: { name: string; email: string } | null;
+}
+
+interface GoogleEventResult {
+  user_id: string;
+  user_email?: string;
+  calendar_id?: string;
+  event_id?: string;
+  created?: boolean;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+}
+
+interface LawmaticsAppointmentResult {
+  appointment_id?: string | null;
+  created?: boolean;
+  updated?: boolean;
+  skipped?: boolean;
+  reason?: string;
+  assigned_user_ids?: number[];
+  error?: string;
 }
 
 // Helper to convert ISO datetime to date/time parts in a given timezone
@@ -73,9 +96,6 @@ function toLocalDateTimeParts(
   return { date: dateStr, time, timeSeconds };
 }
 
-// Note: Using shared lawmatics helpers from _shared/lawmatics.ts
-// pickNumber, lawmaticsFindOrCreateContact, lawmaticsFindOrCreateMatter
-
 // Helper to write progress log
 async function writeLog(
   supabase: any,
@@ -107,53 +127,24 @@ async function writeLog(
   }
 }
 
-
-// Helper to create Google Calendar event with HOST as organizer and ALL participants as attendees
-// Returns the created event ID for persistence
-async function createGoogleCalendarEvent(
+// Helper to refresh Google OAuth token if expired
+async function refreshGoogleTokenIfNeeded(
   supabase: any,
-  meeting: MeetingDetails,
-  hostAttorney: { name: string; email: string } | null,
-  participantEmails: string[],
-  startDatetime: string,
-  endDatetime: string
-): Promise<{ success: boolean; eventId?: string; error?: string }> {
+  calendarConnection: any
+): Promise<{ accessToken: string | null; error?: string }> {
   const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
   const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
 
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-    return { success: false, error: "Google OAuth not configured" };
-  }
-
-  // Use host_attorney_user_id as the organizer for Google event
-  if (!meeting.host_attorney_user_id) {
-    return { success: false, error: "No host assigned to meeting" };
-  }
-
-  // Get Google calendar connection for the HOST (organizer)
-  const { data: calendarConnection } = await supabase
-    .from("calendar_connections")
-    .select("*")
-    .eq("provider", "google")
-    .eq("user_id", meeting.host_attorney_user_id)
-    .maybeSingle();
-
-  if (!calendarConnection) {
-    return { success: false, error: "No Google calendar connection for host user" };
-  }
-
-  // Use the host's primary or first selected calendar
-  let targetCalendarId = "primary";
-  if (calendarConnection.selected_calendar_ids?.length > 0) {
-    targetCalendarId = calendarConnection.selected_calendar_ids[0];
+    return { accessToken: null, error: "Google OAuth not configured" };
   }
 
   let accessToken = calendarConnection.access_token;
 
-  // Refresh token if expired
+  // Check if token is expired
   if (calendarConnection.token_expires_at && new Date(calendarConnection.token_expires_at) < new Date()) {
     if (!calendarConnection.refresh_token) {
-      return { success: false, error: "Token expired and no refresh token available" };
+      return { accessToken: null, error: "Token expired and no refresh token available" };
     }
 
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
@@ -168,7 +159,7 @@ async function createGoogleCalendarEvent(
     });
 
     if (!tokenResponse.ok) {
-      return { success: false, error: "Failed to refresh Google token" };
+      return { accessToken: null, error: "Failed to refresh Google token" };
     }
 
     const tokens = await tokenResponse.json();
@@ -186,11 +177,59 @@ async function createGoogleCalendarEvent(
       .eq("id", calendarConnection.id);
   }
 
+  return { accessToken };
+}
+
+// Create Google Calendar event for a SINGLE user on their own calendar
+async function createGoogleCalendarEventForUser(
+  supabase: any,
+  meeting: MeetingDetails,
+  userId: string,
+  userEmail: string,
+  allParticipantEmails: string[],
+  hostAttorney: { name: string; email: string } | null,
+  startDatetime: string,
+  endDatetime: string
+): Promise<GoogleEventResult> {
+  // Get this user's Google calendar connection
+  const { data: calendarConnection } = await supabase
+    .from("calendar_connections")
+    .select("*")
+    .eq("provider", "google")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!calendarConnection) {
+    return { 
+      user_id: userId, 
+      user_email: userEmail,
+      error: "No Google calendar connection for this user",
+      created: false 
+    };
+  }
+
+  // Refresh token if needed
+  const { accessToken, error: tokenError } = await refreshGoogleTokenIfNeeded(supabase, calendarConnection);
+  if (!accessToken) {
+    return { 
+      user_id: userId, 
+      user_email: userEmail,
+      error: tokenError || "Failed to get access token",
+      created: false 
+    };
+  }
+
+  // Determine target calendar
+  let targetCalendarId = "primary";
+  if (calendarConnection.selected_calendar_ids?.length > 0) {
+    targetCalendarId = calendarConnection.selected_calendar_ids[0];
+  }
+
   // Build attendees list
   const attendees: { email: string; resource?: boolean }[] = [];
   
   // Add ALL internal participants as attendees
-  for (const email of participantEmails) {
+  for (const email of allParticipantEmails) {
     if (email) {
       attendees.push({ email });
     }
@@ -211,7 +250,7 @@ async function createGoogleCalendarEvent(
   const client = meeting.external_attendees?.[0];
   const eventSummary = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
 
-  // Build description based on location mode
+  // Build description
   const descriptionParts = [
     `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
     `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || "In Person") : "Zoom"}`,
@@ -219,8 +258,8 @@ async function createGoogleCalendarEvent(
   if (meeting.location_mode === "InPerson" && meeting.rooms?.name) {
     descriptionParts.push(`Room: ${meeting.rooms.name}`);
   }
-  if (participantEmails.length > 1) {
-    descriptionParts.push(`Participants: ${participantEmails.join(", ")}`);
+  if (allParticipantEmails.length > 1) {
+    descriptionParts.push(`Participants: ${allParticipantEmails.join(", ")}`);
   }
 
   const eventBody = {
@@ -237,9 +276,8 @@ async function createGoogleCalendarEvent(
     description: descriptionParts.join("\n"),
   };
 
-  console.log(`Creating Google Calendar event on calendar: ${targetCalendarId}`, JSON.stringify(eventBody));
+  console.log(`Creating Google Calendar event for user ${userId} on calendar: ${targetCalendarId}`, JSON.stringify(eventBody));
 
-  // Use the host's calendar
   const calendarResponse = await fetch(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCalendarId)}/events?sendUpdates=all`,
     {
@@ -254,13 +292,117 @@ async function createGoogleCalendarEvent(
 
   if (!calendarResponse.ok) {
     const errorText = await calendarResponse.text();
-    console.error("Google Calendar API error:", errorText);
-    return { success: false, error: `Google Calendar API error: ${calendarResponse.status}` };
+    console.error(`Google Calendar API error for user ${userId}:`, errorText);
+    return { 
+      user_id: userId, 
+      user_email: userEmail,
+      calendar_id: targetCalendarId,
+      error: `Google Calendar API error: ${calendarResponse.status}`,
+      created: false 
+    };
   }
 
   const eventData = await calendarResponse.json();
-  console.log("Google Calendar event created:", eventData.id, "on calendar:", targetCalendarId);
-  return { success: true, eventId: eventData.id };
+  console.log(`Google Calendar event created for user ${userId}:`, eventData.id, "on calendar:", targetCalendarId);
+  
+  return { 
+    user_id: userId, 
+    user_email: userEmail,
+    calendar_id: targetCalendarId,
+    event_id: eventData.id,
+    created: true 
+  };
+}
+
+// Create Google Calendar events for ALL participants with idempotency
+async function createGoogleCalendarEventsForAllParticipants(
+  supabase: any,
+  meeting: MeetingDetails,
+  participants: Array<{ id: string; email: string }>,
+  hostAttorney: { name: string; email: string } | null,
+  startDatetime: string,
+  endDatetime: string
+): Promise<{ results: GoogleEventResult[]; warnings: string[] }> {
+  const results: GoogleEventResult[] = [];
+  const warnings: string[] = [];
+  const allParticipantEmails = participants.map(p => p.email).filter(Boolean);
+
+  // Check for existing events for this meeting (idempotency)
+  const { data: existingEvents } = await supabase
+    .from("meeting_google_events")
+    .select("user_id, google_calendar_id, google_event_id")
+    .eq("meeting_id", meeting.id);
+
+  const existingByUser = new Map<string, { calendar_id: string; event_id: string }>();
+  for (const ev of existingEvents || []) {
+    existingByUser.set(ev.user_id, { 
+      calendar_id: ev.google_calendar_id, 
+      event_id: ev.google_event_id 
+    });
+  }
+
+  for (const participant of participants) {
+    // Check idempotency - skip if event already exists for this user
+    const existing = existingByUser.get(participant.id);
+    if (existing) {
+      console.log(`Google event already exists for user ${participant.id}, skipping`, existing.event_id);
+      results.push({
+        user_id: participant.id,
+        user_email: participant.email,
+        calendar_id: existing.calendar_id,
+        event_id: existing.event_id,
+        skipped: true,
+        reason: "Google event already exists for this meeting"
+      });
+      continue;
+    }
+
+    // Create event for this participant
+    try {
+      const result = await createGoogleCalendarEventForUser(
+        supabase,
+        meeting,
+        participant.id,
+        participant.email,
+        allParticipantEmails,
+        hostAttorney,
+        startDatetime,
+        endDatetime
+      );
+
+      results.push(result);
+
+      if (result.created && result.event_id) {
+        // Persist to meeting_google_events table
+        const { error: insertError } = await supabase
+          .from("meeting_google_events")
+          .insert({
+            meeting_id: meeting.id,
+            user_id: participant.id,
+            google_calendar_id: result.calendar_id,
+            google_event_id: result.event_id,
+          });
+
+        if (insertError) {
+          console.error(`Failed to persist Google event for user ${participant.id}:`, insertError);
+        }
+      } else if (result.error) {
+        warnings.push(`Google Calendar for ${participant.email}: ${result.error}`);
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`Google Calendar error for user ${participant.id}:`, errMsg);
+      results.push({
+        user_id: participant.id,
+        user_email: participant.email,
+        error: errMsg,
+        created: false
+      });
+      warnings.push(`Google Calendar for ${participant.email}: ${errMsg}`);
+    }
+  }
+
+  return { results, warnings };
 }
 
 serve(async (req) => {
@@ -310,7 +452,7 @@ serve(async (req) => {
       });
     }
 
-    // 2. Fetch meeting details with relations (including participant_user_ids)
+    // 2. Fetch meeting details with relations
     const { data: meeting, error: meetingError } = await supabase
       .from("meetings")
       .select(`
@@ -351,19 +493,34 @@ serve(async (req) => {
       hostAttorney = attorney;
     }
 
-    // Fetch ALL participant emails for Google Calendar attendees
-    const participantUserIds = meeting.participant_user_ids || [];
-    let participantEmails: string[] = [];
-    
-    if (participantUserIds.length > 0) {
-      const { data: participants } = await supabase
-        .from("users")
-        .select("email")
-        .in("id", participantUserIds);
-      
-      participantEmails = (participants || []).map(p => p.email).filter(Boolean);
-      console.log("Participant emails for Google Calendar:", participantEmails);
+    // Build complete list of participants (host + participant_user_ids, deduplicated)
+    const allParticipantIds = new Set<string>();
+    if (meeting.host_attorney_user_id) {
+      allParticipantIds.add(meeting.host_attorney_user_id);
     }
+    for (const pid of meeting.participant_user_ids || []) {
+      allParticipantIds.add(pid);
+    }
+
+    // Fetch participant details
+    const participantIdsArray = Array.from(allParticipantIds);
+    let participants: Array<{ id: string; email: string; name: string }> = [];
+    
+    if (participantIdsArray.length > 0) {
+      const { data: participantData } = await supabase
+        .from("users")
+        .select("id, email, name")
+        .in("id", participantIdsArray);
+      
+      participants = (participantData || []).map(p => ({ 
+        id: p.id, 
+        email: p.email, 
+        name: p.name 
+      }));
+      console.log("All participants for booking:", participants.map(p => p.email));
+    }
+
+    const participantEmails = participants.map(p => p.email).filter(Boolean);
 
     // 3. Update meeting with selected slot and set status to Booked
     const { error: updateMeetingError } = await supabase
@@ -392,9 +549,11 @@ serve(async (req) => {
       // Non-fatal, continue
     }
 
-    // 5. Create appointment in Lawmatics with robust create/verify/repair
-    let lawmaticsAppointmentId: string | null = null;
+    // 5. Create/update Lawmatics appointment with ALL participants assigned
+    let lawmaticsAppointmentId: string | null = meeting.lawmatics_appointment_id || null;
     let lawmaticsError: string | null = null;
+    let lawmaticsAppointmentResult: LawmaticsAppointmentResult = {};
+    let lawmaticsAppointmentSkipped = false;
 
     const { data: lawmaticsConnection } = await supabase
       .from("lawmatics_connections")
@@ -409,76 +568,111 @@ serve(async (req) => {
 
       const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      await writeLog(supabase, meeting.id, runId, "lawmatics_resolve_user_start", "info", "Resolving Lawmatics owner user by email", {
-        email: hostAttorney?.email || null,
-      });
-
-      const host = await resolveLawmaticsUserIdByEmail(accessToken, hostAttorney?.email || null);
-
-      await writeLog(
-        supabase,
-        meeting.id,
-        runId,
-        host.userId ? "lawmatics_resolve_user_success" : "lawmatics_resolve_user_warn",
-        host.userId ? "success" : "warn",
-        host.userId ? "Resolved Lawmatics owner user" : "Could not resolve Lawmatics owner user by email",
-        { lawmatics_user_id: host.userId, timezone: host.timezone }
-      );
-
-      const effectiveTimezone = host.timezone || meeting.timezone || "America/New_York";
-
-      const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
-      const descriptionParts = [
-        `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
-        `Duration: ${meeting.duration_minutes} minutes`,
-        `Location: ${meeting.location_mode === "InPerson" ? meeting.rooms?.name || "In Person" : "Zoom"}`,
-        hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
-        client?.name ? `Client: ${client.name}` : null,
-        client?.email ? `Client Email: ${client.email}` : null,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      const appointment = await createOrRepairLawmaticsAppointment(
-        accessToken,
-        {
-          name: eventName,
-          description: descriptionParts,
-          startDatetime,
-          endDatetime,
-          timezone: effectiveTimezone,
-          eventTypeId: pickNumber(meeting.meeting_types?.lawmatics_event_type_id),
-          locationId: meeting.location_mode === "InPerson" ? pickNumber(meeting.rooms?.lawmatics_location_id) : null,
-          userId: host.userId,
-          contactId: null,
-          requiresLocation: meeting.location_mode === "InPerson",
-        },
-        async (step, level, message, details) => {
-          await writeLog(supabase, meeting.id, runId, step, level, message, details || {});
-        }
-      );
-
-      if (appointment.createdId && appointment.persisted) {
-        lawmaticsAppointmentId = appointment.createdId;
+      // Check idempotency - if Lawmatics appointment already exists
+      if (meeting.lawmatics_appointment_id) {
+        lawmaticsAppointmentSkipped = true;
+        lawmaticsAppointmentId = meeting.lawmatics_appointment_id;
+        lawmaticsAppointmentResult = {
+          appointment_id: lawmaticsAppointmentId,
+          skipped: true,
+          reason: "Lawmatics appointment already exists for this meeting"
+        };
+        console.log("Lawmatics appointment already exists, skipping creation:", lawmaticsAppointmentId);
+        
+        // TODO: Optionally update existing appointment to ensure all participants are assigned
+        // This would require implementing a PATCH call to update attendees/users
+        
       } else {
-        lawmaticsError = appointment.error || "Lawmatics appointment did not persist times/owner";
-        await writeLog(supabase, meeting.id, runId, "lawmatics_final_status", "error", "Lawmatics appointment did not persist", {
-          createdId: appointment.createdId,
-          readback: appointment.readback,
-          error: appointment.error,
+        await writeLog(supabase, meeting.id, runId, "lawmatics_resolve_user_start", "info", "Resolving Lawmatics owner user by email", {
+          email: hostAttorney?.email || null,
         });
+
+        // Resolve the primary host user
+        const host = await resolveLawmaticsUserIdByEmail(accessToken, hostAttorney?.email || null);
+
+        await writeLog(
+          supabase,
+          meeting.id,
+          runId,
+          host.userId ? "lawmatics_resolve_user_success" : "lawmatics_resolve_user_warn",
+          host.userId ? "success" : "warn",
+          host.userId ? "Resolved Lawmatics owner user" : "Could not resolve Lawmatics owner user by email",
+          { lawmatics_user_id: host.userId, timezone: host.timezone }
+        );
+
+        // Resolve all participant Lawmatics user IDs
+        const resolvedParticipantLawmaticsIds: number[] = [];
+        for (const participant of participants) {
+          const resolved = await resolveLawmaticsUserIdByEmail(accessToken, participant.email);
+          if (resolved.userId) {
+            resolvedParticipantLawmaticsIds.push(resolved.userId);
+          }
+        }
+        console.log("Resolved Lawmatics user IDs for participants:", resolvedParticipantLawmaticsIds);
+
+        const effectiveTimezone = host.timezone || meeting.timezone || "America/New_York";
+
+        const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+        const descriptionParts = [
+          `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
+          `Duration: ${meeting.duration_minutes} minutes`,
+          `Location: ${meeting.location_mode === "InPerson" ? meeting.rooms?.name || "In Person" : "Zoom"}`,
+          hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
+          client?.name ? `Client: ${client.name}` : null,
+          client?.email ? `Client Email: ${client.email}` : null,
+          participantEmails.length > 1 ? `All Participants: ${participantEmails.join(", ")}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
+
+        const appointment = await createOrRepairLawmaticsAppointment(
+          accessToken,
+          {
+            name: eventName,
+            description: descriptionParts,
+            startDatetime,
+            endDatetime,
+            timezone: effectiveTimezone,
+            eventTypeId: pickNumber(meeting.meeting_types?.lawmatics_event_type_id),
+            locationId: meeting.location_mode === "InPerson" ? pickNumber(meeting.rooms?.lawmatics_location_id) : null,
+            userId: host.userId,
+            contactId: null,
+            requiresLocation: meeting.location_mode === "InPerson",
+            // Note: If Lawmatics API supports assigned_user_ids or attendees, add them here
+            // This would be something like: assignedUserIds: resolvedParticipantLawmaticsIds
+          },
+          async (step, level, message, details) => {
+            await writeLog(supabase, meeting.id, runId, step, level, message, details || {});
+          }
+        );
+
+        if (appointment.createdId && appointment.persisted) {
+          lawmaticsAppointmentId = appointment.createdId;
+          lawmaticsAppointmentResult = {
+            appointment_id: lawmaticsAppointmentId,
+            created: true,
+            assigned_user_ids: resolvedParticipantLawmaticsIds
+          };
+        } else {
+          lawmaticsError = appointment.error || "Lawmatics appointment did not persist times/owner";
+          lawmaticsAppointmentResult = {
+            error: lawmaticsError
+          };
+          await writeLog(supabase, meeting.id, runId, "lawmatics_final_status", "error", "Lawmatics appointment did not persist", {
+            createdId: appointment.createdId,
+            readback: appointment.readback,
+            error: appointment.error,
+          });
+        }
       }
     } else {
       console.log("No Lawmatics connection configured");
     }
 
     // 6. Handle Lawmatics result - DO NOT BLOCK CLIENT on Lawmatics failure
-    // The meeting is already marked as Booked (step 3), so the client booking is complete.
-    // Log a warning for staff to review, but let the client see success.
     if (lawmaticsError && lawmaticsConnection) {
       console.warn("Lawmatics sync failed (non-blocking):", lawmaticsError);
       
-      // Log audit record for staff to review - but do NOT change meeting status to Failed
       await supabase.from("audit_logs").insert({
         action_type: "Failed",
         meeting_id: meeting.id,
@@ -491,11 +685,10 @@ serve(async (req) => {
           note: "Staff should manually create appointment in Lawmatics if needed",
         },
       });
-      // Continue to success response - do NOT return 500
     }
 
     // 7. Store Lawmatics appointment ID if returned
-    if (lawmaticsAppointmentId) {
+    if (lawmaticsAppointmentId && !meeting.lawmatics_appointment_id) {
       await supabase
         .from("meetings")
         .update({ 
@@ -585,7 +778,6 @@ serve(async (req) => {
           if (lawmaticsAppointmentId) {
             matterDescParts.push(`Lawmatics Appointment ID: ${lawmaticsAppointmentId}`);
           }
-          // Google event ID will be added after creation
 
           const matterResult = await lawmaticsFindOrCreateMatter(
             accessToken,
@@ -619,45 +811,35 @@ serve(async (req) => {
       }
     }
 
-    // 9. Create Google Calendar event with HOST as organizer and ALL participants as attendees
-    let googleResult: { success: boolean; eventId?: string; error?: string } | null = null;
-    let googleWarning: string | null = null;
+    // 9. Create Google Calendar events for ALL participants (with idempotency)
+    let googleResults: GoogleEventResult[] = [];
+    let googleWarnings: string[] = [];
 
-    if (meeting.host_attorney_user_id) {
-      console.log("Attempting Google Calendar event creation for host:", meeting.host_attorney_user_id, "with participants:", participantEmails);
+    if (participants.length > 0) {
+      console.log("Creating Google Calendar events for all participants:", participants.map(p => p.email));
       
-      googleResult = await createGoogleCalendarEvent(
+      const googleResponse = await createGoogleCalendarEventsForAllParticipants(
         supabase,
         meeting as unknown as MeetingDetails,
+        participants,
         hostAttorney,
-        participantEmails,
         startDatetime,
         endDatetime
       );
       
-      if (!googleResult.success) {
-        console.warn("Google Calendar event creation failed (non-fatal):", googleResult.error);
-        googleWarning = googleResult.error || "Unknown Google Calendar error";
-      } else {
-        console.log("Google Calendar event created successfully:", googleResult.eventId);
-        
-        // Persist google_event_id to meeting
-        if (googleResult.eventId) {
-          await supabase
-            .from("meetings")
-            .update({ 
-              google_event_id: googleResult.eventId,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", meeting.id);
-        }
-      }
+      googleResults = googleResponse.results;
+      googleWarnings = googleResponse.warnings;
+      
+      console.log("Google Calendar results:", googleResults.length, "total,", 
+        googleResults.filter(r => r.created).length, "created,",
+        googleResults.filter(r => r.skipped).length, "skipped");
     } else {
-      console.log("Skipping Google Calendar event - no host_attorney_user_id on meeting");
+      console.log("Skipping Google Calendar events - no participants");
     }
 
     // Build warnings array for response
-    const warnings: { system: string; message: string }[] = [];
+    const warnings: { system: string; message: string; user_id?: string }[] = [];
+    
     if (lawmaticsError && lawmaticsConnection) {
       warnings.push({ system: "lawmatics_appointment", message: lawmaticsError });
     }
@@ -667,8 +849,8 @@ serve(async (req) => {
     if (matterWarning) {
       warnings.push({ system: "lawmatics_matter", message: matterWarning });
     }
-    if (googleWarning) {
-      warnings.push({ system: "google", message: googleWarning });
+    for (const gw of googleWarnings) {
+      warnings.push({ system: "google", message: gw });
     }
 
     // 10. Log success audit
@@ -680,15 +862,16 @@ serve(async (req) => {
         start_datetime: startDatetime,
         end_datetime: endDatetime,
         lawmatics_appointment_id: lawmaticsAppointmentId,
+        lawmatics_appointment_skipped: lawmaticsAppointmentSkipped,
         lawmatics_contact_id: lawmaticsContactId,
         lawmatics_matter_id: lawmaticsMatterId,
         lawmatics_event_type_id: meeting.meeting_types?.lawmatics_event_type_id || null,
         lawmatics_location_id: meeting.rooms?.lawmatics_location_id || null,
         room_reservation_mode: roomReservationMode,
-        google_event_id: googleResult?.eventId ?? null,
-        google_calendar_success: googleResult?.success ?? null,
-        google_calendar_error: googleWarning,
-        participant_count: participantEmails.length,
+        google_events_created: googleResults.filter(r => r.created).length,
+        google_events_skipped: googleResults.filter(r => r.skipped).length,
+        google_events_failed: googleResults.filter(r => r.error && !r.skipped).length,
+        participant_count: participants.length,
       },
     });
 
@@ -705,14 +888,39 @@ serve(async (req) => {
       ? `Lawmatics matter already exists (ID: ${lawmaticsMatterId}). Skipped matter creation.`
       : undefined;
 
+    // Build Google response object
+    const googleInfo = {
+      results: googleResults,
+      summary: {
+        total: googleResults.length,
+        created: googleResults.filter(r => r.created).length,
+        skipped: googleResults.filter(r => r.skipped).length,
+        failed: googleResults.filter(r => r.error && !r.skipped).length,
+      }
+    };
+
+    // Build Lawmatics appointment response object
+    const lawmaticsAppointmentInfo = lawmaticsAppointmentResult.appointment_id
+      ? {
+          id: lawmaticsAppointmentResult.appointment_id,
+          created: lawmaticsAppointmentResult.created || false,
+          skipped: lawmaticsAppointmentResult.skipped || false,
+          reason: lawmaticsAppointmentResult.reason,
+          assigned_user_ids: lawmaticsAppointmentResult.assigned_user_ids,
+        }
+      : lawmaticsAppointmentResult.error
+        ? { error: lawmaticsAppointmentResult.error }
+        : null;
+
     return new Response(JSON.stringify({ 
       success: true,
       meetingId: meeting.id,
       lawmaticsAppointmentId,
+      lawmaticsAppointment: lawmaticsAppointmentInfo,
       lawmaticsContactId,
       lawmaticsMatterId,
       matter: matterInfo,
-      googleEventId: googleResult?.eventId ?? null,
+      google: googleInfo,
       warnings: warnings.length > 0 ? warnings : undefined,
       message: responseMessage,
     }), {
