@@ -1103,6 +1103,13 @@ export async function createOrRepairLawmaticsAppointment(
     name: params.name,
     description: params.description || "",
     all_day: false,
+    is_all_day: false,
+
+    // ISO timestamps
+    starts_at: params.startDatetime,
+    ends_at: params.endDatetime,
+
+    // Date/time parts
     start_date: startParts.date,
     start_time: startParts.time,
     end_date: endParts.date,
