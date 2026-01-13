@@ -286,6 +286,48 @@ export type Database = {
         }
         Relationships: []
       }
+      meeting_google_events: {
+        Row: {
+          created_at: string
+          google_calendar_id: string
+          google_event_id: string
+          id: string
+          meeting_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          google_calendar_id: string
+          google_event_id: string
+          id?: string
+          meeting_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          google_calendar_id?: string
+          google_event_id?: string
+          id?: string
+          meeting_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meeting_google_events_meeting_id_fkey"
+            columns: ["meeting_id"]
+            isOneToOne: false
+            referencedRelation: "meetings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meeting_google_events_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_types: {
         Row: {
           active: boolean
