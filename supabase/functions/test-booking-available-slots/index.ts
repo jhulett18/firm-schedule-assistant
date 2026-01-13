@@ -121,11 +121,53 @@ async function getBusyIntervalsForCalendar(
   return calendar?.busy || [];
 }
 
+// Helper to create a Date object representing a specific local time in a timezone
+function createDateInTimezone(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
+  // Create an ISO string without timezone
+  const isoString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+
+  // Create a reference date in UTC
+  const utcDate = new Date(isoString + 'Z');
+
+  // Format to see what this UTC time looks like in the target timezone
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+
+  const parts = formatter.formatToParts(utcDate);
+  const tzYear = Number(parts.find(p => p.type === 'year')!.value);
+  const tzMonth = Number(parts.find(p => p.type === 'month')!.value);
+  const tzDay = Number(parts.find(p => p.type === 'day')!.value);
+  const tzHour = Number(parts.find(p => p.type === 'hour')!.value);
+  const tzMinute = Number(parts.find(p => p.type === 'minute')!.value);
+  const tzSecond = Number(parts.find(p => p.type === 'second')!.value);
+
+  // Calculate the offset between what we wanted and what we got
+  const offset =
+    (year - tzYear) * 365 * 24 * 60 * 60 * 1000 +
+    (month - tzMonth) * 30 * 24 * 60 * 60 * 1000 +
+    (day - tzDay) * 24 * 60 * 60 * 1000 +
+    (hour - tzHour) * 60 * 60 * 1000 +
+    (minute - tzMinute) * 60 * 1000 +
+    (0 - tzSecond) * 1000;
+
+  // Return the UTC date adjusted by the offset
+  return new Date(utcDate.getTime() + offset);
+}
+
 function suggestSlots(
   busyIntervals: BusyInterval[],
   startDate: Date,
   endDate: Date,
-  durationMinutes: number
+  durationMinutes: number,
+  timezone: string = "America/New_York"
 ): TimeSlot[] {
   const businessHoursStart = "09:00";
   const businessHoursEnd = "17:00";
@@ -154,18 +196,17 @@ function suggestSlots(
     const [startHour, startMin] = businessHoursStart.split(":").map(Number);
     const [endHour, endMin] = businessHoursEnd.split(":").map(Number);
 
-    const dayStart = new Date(currentDate);
-    dayStart.setHours(startHour, startMin, 0, 0);
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth() + 1;
+    const day = currentDate.getDate();
 
-    const dayEnd = new Date(currentDate);
-    dayEnd.setHours(endHour, endMin, 0, 0);
+    const dayStart = createDateInTimezone(year, month, day, startHour, startMin, timezone);
+    const dayEnd = createDateInTimezone(year, month, day, endHour, endMin, timezone);
 
     const [lunchStartHour, lunchStartMin] = lunchStart.split(":").map(Number);
     const [lunchEndHour, lunchEndMin] = lunchEnd.split(":").map(Number);
-    const lunchStartTime = new Date(currentDate);
-    lunchStartTime.setHours(lunchStartHour, lunchStartMin, 0, 0);
-    const lunchEndTime = new Date(currentDate);
-    lunchEndTime.setHours(lunchEndHour, lunchEndMin, 0, 0);
+    const lunchStartTime = createDateInTimezone(year, month, day, lunchStartHour, lunchStartMin, timezone);
+    const lunchEndTime = createDateInTimezone(year, month, day, lunchEndHour, lunchEndMin, timezone);
 
     const dayBusy = sortedBusy.filter((b) => b.start < dayEnd && b.end > dayStart);
     dayBusy.push({ start: lunchStartTime, end: lunchEndTime });
@@ -367,8 +408,8 @@ serve(async (req) => {
       console.log(`Added ${roomBusy.length} room busy intervals`);
     }
 
-    // Generate available slots
-    const slots = suggestSlots(busyIntervals, startDate, endDate, meeting.duration_minutes);
+    // Generate available slots (using America/New_York timezone for business hours)
+    const slots = suggestSlots(busyIntervals, startDate, endDate, meeting.duration_minutes, "America/New_York");
 
     console.log(`Returning ${slots.length} available slots`);
 
