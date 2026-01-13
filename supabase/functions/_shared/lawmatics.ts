@@ -1045,6 +1045,7 @@ export interface AppointmentParams {
   userId?: number | null;
   contactId?: number | null;
   requiresLocation?: boolean;
+  useUtcDateTimeParts?: boolean;
 }
 
 export interface AppointmentResult {
@@ -1077,8 +1078,9 @@ export async function createOrRepairLawmaticsAppointment(
 ): Promise<AppointmentResult> {
   const attempts: Array<{ endpoint: string; method: string; status: number; body_excerpt: string }> = [];
 
-  const startParts = toLocalDateTimeParts(params.startDatetime, params.timezone);
-  const endParts = toLocalDateTimeParts(params.endDatetime, params.timezone);
+  const partsTimezone = params.useUtcDateTimeParts ? "UTC" : params.timezone;
+  const startParts = toLocalDateTimeParts(params.startDatetime, partsTimezone);
+  const endParts = toLocalDateTimeParts(params.endDatetime, partsTimezone);
 
   await log("lawmatics_create_event_start", "info", "Creating Lawmatics event", {
     name: params.name,

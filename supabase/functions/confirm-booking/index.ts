@@ -818,6 +818,7 @@ serve(async (req) => {
                   userId: host.userId,
                   contactId: lawmaticsContactId ? parseInt(lawmaticsContactId, 10) : null,
                   requiresLocation: meeting.location_mode === "InPerson",
+                  useUtcDateTimeParts: true,
                 },
                 async (step, level, message, details) => {
                   await writeLog(supabase, meeting.id, runId, step, level, message, details || {});
