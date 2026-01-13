@@ -97,6 +97,34 @@ function toLocalDateTimeParts(
   return { date: dateStr, time, timeSeconds };
 }
 
+function normalizeIsoForTimezone(isoDatetime: string, timezone: string): string {
+  if (/[zZ]|[+-]\\d{2}:\\d{2}$/.test(isoDatetime)) {
+    return isoDatetime;
+  }
+
+  const [datePart, timePartRaw] = isoDatetime.split("T");
+  if (!datePart || !timePartRaw) {
+    return isoDatetime;
+  }
+
+  const [year, month, day] = datePart.split("-").map(Number);
+  const [timePart] = timePartRaw.split(".");
+  const [hourStr, minuteStr, secondStr = "00"] = timePart.split(":");
+
+  const utcDate = new Date(Date.UTC(
+    year,
+    (month || 1) - 1,
+    day || 1,
+    Number(hourStr || "0"),
+    Number(minuteStr || "0"),
+    Number(secondStr || "0")
+  ));
+
+  const tzDate = new Date(utcDate.toLocaleString("en-US", { timeZone: timezone }));
+  const offsetMs = utcDate.getTime() - tzDate.getTime();
+  return new Date(utcDate.getTime() - offsetMs).toISOString();
+}
+
 // Helper to write progress log (non-blocking)
 async function writeLog(
   supabase: any,
@@ -756,6 +784,8 @@ serve(async (req) => {
 
               const host = await resolveLawmaticsUserIdByEmail(accessToken, hostAttorney?.email || null);
               const effectiveTimezone = host.timezone || meeting.timezone || "America/New_York";
+              const lawmaticsStartDatetime = normalizeIsoForTimezone(startDatetime, effectiveTimezone);
+              const lawmaticsEndDatetime = normalizeIsoForTimezone(endDatetime, effectiveTimezone);
 
               // Resolve all participant Lawmatics user IDs
               const resolvedParticipantLawmaticsIds: number[] = [];
@@ -780,8 +810,8 @@ serve(async (req) => {
                 {
                   name: eventName,
                   description: descriptionParts,
-                  startDatetime,
-                  endDatetime,
+                  startDatetime: lawmaticsStartDatetime,
+                  endDatetime: lawmaticsEndDatetime,
                   timezone: effectiveTimezone,
                   eventTypeId: pickNumber(meeting.meeting_types?.lawmatics_event_type_id),
                   locationId: meeting.location_mode === "InPerson" ? pickNumber(meeting.rooms?.lawmatics_location_id) : null,
@@ -852,7 +882,8 @@ serve(async (req) => {
                 // Create Matter
                 const meetingTypeName = meeting.meeting_types?.name || "Meeting";
                 const matterTitle = `${clientLastName}, ${clientFirstName} - ${meetingTypeName}`;
-                const startParts = toLocalDateTimeParts(startDatetime, timezone);
+                const matterStartDatetime = normalizeIsoForTimezone(startDatetime, timezone);
+                const startParts = toLocalDateTimeParts(matterStartDatetime, timezone);
                 const matterDescription = [
                   `Meeting Type: ${meetingTypeName}`,
                   `Scheduled: ${startParts.date} ${startParts.time} (${timezone})`,
