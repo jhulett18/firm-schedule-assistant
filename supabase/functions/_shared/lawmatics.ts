@@ -1077,14 +1077,15 @@ export async function createOrRepairLawmaticsAppointment(
 ): Promise<AppointmentResult> {
   const attempts: Array<{ endpoint: string; method: string; status: number; body_excerpt: string }> = [];
 
-  const { date, time } = toLocalDateTimeParts(params.startDatetime, params.timezone);
-  const { time: endTime } = toLocalDateTimeParts(params.endDatetime, params.timezone);
+  const startParts = toLocalDateTimeParts(params.startDatetime, params.timezone);
+  const endParts = toLocalDateTimeParts(params.endDatetime, params.timezone);
 
   await log("lawmatics_create_event_start", "info", "Creating Lawmatics event", {
     name: params.name,
-    start_date: date,
-    start_time: time,
-    end_time: endTime,
+    start_date: startParts.date,
+    start_time: startParts.time,
+    end_date: endParts.date,
+    end_time: endParts.time,
     timezone: params.timezone,
     event_type_id: params.eventTypeId,
     location_id: params.locationId,
@@ -1101,9 +1102,14 @@ export async function createOrRepairLawmaticsAppointment(
   const payload: Record<string, any> = {
     name: params.name,
     description: params.description || "",
-    start_date: date,
-    start_time: time,
-    end_time: endTime,
+    all_day: false,
+    is_all_day: false,
+    starts_at: params.startDatetime,
+    ends_at: params.endDatetime,
+    start_date: startParts.date,
+    start_time: startParts.time,
+    end_date: endParts.date,
+    end_time: endParts.time,
     time_zone: params.timezone,
   };
 
@@ -1140,7 +1146,7 @@ export async function createOrRepairLawmaticsAppointment(
           attempts,
           timezoneUsed: params.timezone,
           ownerUserIdUsed: params.userId ?? null,
-          computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+          computed: { start_date: startParts.date, start_time: startParts.time, end_date: endParts.date, end_time: endParts.time },
         };
       }
 
@@ -1155,7 +1161,7 @@ export async function createOrRepairLawmaticsAppointment(
           attempts,
           timezoneUsed: params.timezone,
           ownerUserIdUsed: params.userId ?? null,
-          computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+          computed: { start_date: startParts.date, start_time: startParts.time, end_date: endParts.date, end_time: endParts.time },
         };
       }
 
@@ -1188,18 +1194,18 @@ export async function createOrRepairLawmaticsAppointment(
           attempts,
           timezoneUsed: params.timezone,
           ownerUserIdUsed: params.userId ?? null,
-          computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+          computed: { start_date: startParts.date, start_time: startParts.time, end_date: endParts.date, end_time: endParts.time },
         };
       }
 
       // Check if times and owner persisted
-      const timesOk = readback.start_date === date && readback.start_time === time;
+      const timesOk = readback.start_date === startParts.date && readback.start_time === startParts.time;
       const ownerOk = !params.userId || readback.user_id === String(params.userId);
 
       if (!timesOk || !ownerOk) {
         await log("lawmatics_readback_mismatch", "warn", "Event created but fields may not have persisted correctly", {
-          expected_date: date,
-          expected_time: time,
+          expected_date: startParts.date,
+          expected_time: startParts.time,
           expected_user_id: params.userId,
           actual_date: readback.start_date,
           actual_time: readback.start_time,
@@ -1214,7 +1220,7 @@ export async function createOrRepairLawmaticsAppointment(
         attempts,
         timezoneUsed: params.timezone,
         ownerUserIdUsed: params.userId ?? null,
-        computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+        computed: { start_date: startParts.date, start_time: startParts.time, end_date: endParts.date, end_time: endParts.time },
       };
     }
   } catch (err) {
@@ -1229,7 +1235,7 @@ export async function createOrRepairLawmaticsAppointment(
       attempts,
       timezoneUsed: params.timezone,
       ownerUserIdUsed: params.userId ?? null,
-      computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+      computed: { start_date: startParts.date, start_time: startParts.time, end_date: endParts.date, end_time: endParts.time },
     };
   }
 }
