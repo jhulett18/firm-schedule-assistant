@@ -136,13 +136,14 @@ serve(async (req) => {
       console.error("Error searching for contact:", err);
     }
 
-    // Step 2: If we found a contact, search for matters by contact_id
+    // Step 2: If we found a contact, search for matters (prospects) by contact_id
+    // IMPORTANT: Lawmatics uses /v1/prospects endpoint for matters, NOT /v1/matters
     if (contactId) {
       try {
         const mattersRes = await lawmaticsFetch(
           accessToken,
           "GET",
-          `/v1/matters?contact_id=${contactId}&per_page=50`
+          `/v1/prospects?filter_by=contact_id&filter_on=${contactId}&fields=case_title,status,practice_area,updated_at&per_page=50`
         );
         const { ok, json } = await lawmaticsJson(mattersRes);
 
@@ -156,7 +157,7 @@ serve(async (req) => {
 
             matters.push({
               id,
-              title: pickString(attrs?.name) || pickString(attrs?.title) || `Matter ${id}`,
+              title: pickString(attrs?.case_title) || pickString(attrs?.name) || pickString(attrs?.title) || `Matter ${id}`,
               status: pickString(attrs?.status) || pickString(attrs?.stage),
               practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
               updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),
@@ -170,13 +171,14 @@ serve(async (req) => {
       }
     }
 
-    // Step 3: Also do a direct search by email in case there are matters not linked to contact
+    // Step 3: Also do a direct search by first_name/last_name or email in case there are matters not linked via contact_id
     if (matters.length === 0) {
       try {
+        // Try searching prospects by email-like pattern using first_name filter (Lawmatics may match email in name fields)
         const searchRes = await lawmaticsFetch(
           accessToken,
           "GET",
-          `/v1/matters?search=${encodeURIComponent(email)}&per_page=20`
+          `/v1/prospects?filter_by=email&filter_on=${encodeURIComponent(email)}&fields=case_title,status,practice_area,updated_at&per_page=20`
         );
         const { ok, json } = await lawmaticsJson(searchRes);
 
@@ -191,7 +193,7 @@ serve(async (req) => {
 
             matters.push({
               id,
-              title: pickString(attrs?.name) || pickString(attrs?.title) || `Matter ${id}`,
+              title: pickString(attrs?.case_title) || pickString(attrs?.name) || pickString(attrs?.title) || `Matter ${id}`,
               status: pickString(attrs?.status) || pickString(attrs?.stage),
               practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
               updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),

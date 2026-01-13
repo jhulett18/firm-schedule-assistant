@@ -327,8 +327,9 @@ export async function lawmaticsFindOrCreateContact(
 }
 
 /**
- * Create a NEW Lawmatics matter for a contact.
+ * Create a NEW Lawmatics matter (prospect) for a contact.
  * Does NOT search for existing matters - always creates a new one.
+ * Uses /v1/prospects endpoint (Lawmatics calls matters "prospects" in their API).
  * Returns matter_id.
  */
 export async function lawmaticsCreateMatter(
@@ -347,19 +348,23 @@ export async function lawmaticsCreateMatter(
   }
 
   try {
+    // Lawmatics API uses "prospects" for matters
+    // The case_title field is the matter name/title
+    // contact_id links the matter to an existing contact
     const payload: Record<string, any> = {
-      name: matterName,
+      case_title: matterName,
       contact_id: pickNumber(contactId),
     };
     
-    // Add description/notes if provided
+    // Add notes if description provided
     if (description) {
-      payload.description = description;
+      payload.notes = description;
     }
     
-    console.log("[Lawmatics] Creating matter:", JSON.stringify(payload));
+    console.log("[Lawmatics] Creating matter (prospect):", JSON.stringify(payload));
 
-    const res = await lawmaticsFetch(accessToken, "POST", "/v1/matters", payload);
+    // IMPORTANT: Lawmatics uses /v1/prospects endpoint for matters, NOT /v1/matters
+    const res = await lawmaticsFetch(accessToken, "POST", "/v1/prospects", payload);
     const { ok, status, json, excerpt } = await lawmaticsJson(res);
 
     if (!ok) {
@@ -369,7 +374,7 @@ export async function lawmaticsCreateMatter(
 
     const idStr = pickString(json?.data?.id ?? json?.id);
     const idNum = pickNumber(idStr);
-    console.log("[Lawmatics] Created matter:", idStr);
+    console.log("[Lawmatics] Created matter (prospect):", idStr);
     return { matterId: idNum, matterIdStr: idStr, created: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
