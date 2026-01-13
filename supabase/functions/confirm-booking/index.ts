@@ -3,6 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   createOrRepairLawmaticsAppointment,
   resolveLawmaticsUserIdByEmail,
+  lawmaticsFindOrCreateContact,
+  lawmaticsFindOrCreateMatter,
+  pickString,
+  pickNumber,
 } from "../_shared/lawmatics.ts";
 
 const corsHeaders = {
@@ -69,92 +73,8 @@ function toLocalDateTimeParts(
   return { date: dateStr, time, timeSeconds };
 }
 
-// ========== LAWMATICS HELPERS ==========
-
-function pickNumber(v: any): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && v.trim()) {
-    const n = parseInt(v, 10);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-interface LawmaticsUser {
-  id: string;
-  email: string | null;
-  name: string | null;
-  timezone: string | null;
-}
-
-async function lawmaticsListUsers(accessToken: string): Promise<LawmaticsUser[]> {
-  const allUsers: LawmaticsUser[] = [];
-  let page = 1;
-  try {
-    while (page <= 10) {
-      const res = await fetch(`https://api.lawmatics.com/v1/users?page=${page}&per_page=100`, {
-        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-      });
-      if (!res.ok) break;
-      const json = await res.json();
-      const rawUsers: any[] = Array.isArray(json?.data) ? json.data : [];
-      if (rawUsers.length === 0) break;
-      for (const u of rawUsers) {
-        const attrs = u?.attributes ?? u;
-        allUsers.push({
-          id: String(u?.id || ""),
-          email: attrs?.email || null,
-          name: attrs?.name || attrs?.full_name || null,
-          timezone: attrs?.time_zone || attrs?.timezone || null,
-        });
-      }
-      if (rawUsers.length < 100) break;
-      page++;
-    }
-  } catch {}
-  return allUsers;
-}
-
-async function lawmaticsResolveUserByEmail(accessToken: string, targetEmail: string | null): Promise<{ userId: number | null; timezone: string | null }> {
-  const users = await lawmaticsListUsers(accessToken);
-  const normalized = (targetEmail || "").toLowerCase();
-  if (normalized) {
-    const match = users.find(u => u.email?.toLowerCase() === normalized);
-    if (match) return { userId: pickNumber(match.id), timezone: match.timezone };
-  }
-  if (users[0]) return { userId: pickNumber(users[0].id), timezone: users[0].timezone };
-  return { userId: null, timezone: null };
-}
-
-async function lawmaticsFindOrCreateContact(accessToken: string, email: string, name: string): Promise<number | null> {
-  if (!email) return null;
-  try {
-    const searchRes = await fetch(`https://api.lawmatics.com/v1/contacts?search=${encodeURIComponent(email)}&per_page=10`, {
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-    });
-    if (searchRes.ok) {
-      const json = await searchRes.json();
-      const contacts: any[] = Array.isArray(json?.data) ? json.data : [];
-      const match = contacts.find(c => (c?.attributes?.email || c?.email || "").toLowerCase() === email.toLowerCase());
-      if (match) return pickNumber(match?.id);
-    }
-  } catch {}
-  
-  const tokens = name.split(/\s+/).filter(Boolean);
-  const payload = { first_name: tokens[0] || "Client", last_name: tokens.slice(1).join(" ") || "Booking", email };
-  try {
-    const createRes = await fetch("https://api.lawmatics.com/v1/contacts", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (createRes.ok) {
-      const json = await createRes.json();
-      return pickNumber(json?.data?.id ?? json?.id);
-    }
-  } catch {}
-  return null;
-}
+// Note: Using shared lawmatics helpers from _shared/lawmatics.ts
+// pickNumber, lawmaticsFindOrCreateContact, lawmaticsFindOrCreateMatter
 
 // Helper to write progress log
 async function writeLog(
@@ -585,7 +505,117 @@ serve(async (req) => {
         .eq("id", meeting.id);
     }
 
-    // 8. Create Google Calendar event with HOST as organizer and ALL participants as attendees
+    // 8. Create Lawmatics Contact and Matter (NON-BLOCKING)
+    let lawmaticsContactId: string | null = null;
+    let lawmaticsMatterId: string | null = null;
+    let contactWarning: string | null = null;
+    let matterWarning: string | null = null;
+
+    if (lawmaticsConnection?.access_token) {
+      const accessToken = lawmaticsConnection.access_token;
+      const client = meeting.external_attendees?.[0];
+      const clientEmail = pickString(client?.email);
+      const clientName = pickString(client?.name) || "Client";
+      const clientPhone = pickString(client?.phone);
+
+      // Check idempotency - if matter already exists, skip
+      if (meeting.lawmatics_matter_id) {
+        console.log("Lawmatics matter already exists, skipping creation:", meeting.lawmatics_matter_id);
+        lawmaticsMatterId = meeting.lawmatics_matter_id;
+      } else if (clientEmail) {
+        // A) Find or create Lawmatics contact
+        const tokens = clientName.split(/\s+/).filter(Boolean);
+        const contactResult = await lawmaticsFindOrCreateContact(accessToken, {
+          email: clientEmail,
+          name: clientName,
+          first_name: tokens[0] || "Client",
+          last_name: tokens.slice(1).join(" ") || "Booking",
+        });
+
+        if (contactResult.contactIdStr) {
+          lawmaticsContactId = contactResult.contactIdStr;
+          console.log("Lawmatics contact resolved:", lawmaticsContactId, contactResult.created ? "(created)" : "(existing)");
+          
+          // Persist contact ID immediately
+          await supabase
+            .from("meetings")
+            .update({ 
+              lawmatics_contact_id: lawmaticsContactId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", meeting.id);
+
+          // B) Create Lawmatics Matter
+          const clientLastName = tokens.slice(1).join(" ") || tokens[0] || "Client";
+          const clientFirstName = tokens[0] || "Client";
+          const meetingTypeName = meeting.meeting_types?.name || "Meeting";
+          const matterTitle = `${clientLastName}, ${clientFirstName} - ${meetingTypeName}`;
+
+          // Build description with booking details
+          const startParts = toLocalDateTimeParts(startDatetime, timezone);
+          const endParts = toLocalDateTimeParts(endDatetime, timezone);
+          
+          const matterDescParts = [
+            `Meeting Type: ${meetingTypeName}`,
+            `Scheduled: ${startParts.date} ${startParts.time} - ${endParts.time} (${timezone})`,
+            `Duration: ${meeting.duration_minutes} minutes`,
+            `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || "In Person") : "Zoom"}`,
+          ];
+          
+          if (meeting.rooms?.name && meeting.location_mode === "InPerson") {
+            matterDescParts.push(`Room: ${meeting.rooms.name}`);
+          }
+          
+          if (hostAttorney) {
+            matterDescParts.push(`Host Attorney: ${hostAttorney.name} (${hostAttorney.email})`);
+          }
+          
+          if (participantEmails.length > 0) {
+            matterDescParts.push(`Participants: ${participantEmails.join(", ")}`);
+          }
+          
+          matterDescParts.push("");
+          matterDescParts.push("--- Traceability ---");
+          matterDescParts.push(`Booking Request ID: ${bookingRequest.id}`);
+          matterDescParts.push(`Meeting ID: ${meeting.id}`);
+          if (lawmaticsAppointmentId) {
+            matterDescParts.push(`Lawmatics Appointment ID: ${lawmaticsAppointmentId}`);
+          }
+          // Google event ID will be added after creation
+
+          const matterResult = await lawmaticsFindOrCreateMatter(
+            accessToken,
+            lawmaticsContactId,
+            { email: clientEmail, name: clientName },
+            matterTitle
+          );
+
+          if (matterResult.matterIdStr) {
+            lawmaticsMatterId = matterResult.matterIdStr;
+            console.log("Lawmatics matter resolved:", lawmaticsMatterId, matterResult.created ? "(created)" : "(existing)");
+            
+            // Persist matter ID
+            await supabase
+              .from("meetings")
+              .update({ 
+                lawmatics_matter_id: lawmaticsMatterId,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", meeting.id);
+          } else {
+            matterWarning = matterResult.error || "Failed to create Lawmatics matter";
+            console.warn("Lawmatics matter creation failed (non-blocking):", matterWarning);
+          }
+        } else {
+          contactWarning = contactResult.error || "Failed to create Lawmatics contact";
+          console.warn("Lawmatics contact creation failed (non-blocking):", contactWarning);
+        }
+      } else {
+        console.log("Skipping Lawmatics contact/matter - no client email");
+      }
+    }
+
+    // 9. Create Google Calendar event with HOST as organizer and ALL participants as attendees
     let googleResult: { success: boolean; eventId?: string; error?: string } | null = null;
     let googleWarning: string | null = null;
 
@@ -625,13 +655,19 @@ serve(async (req) => {
     // Build warnings array for response
     const warnings: { system: string; message: string }[] = [];
     if (lawmaticsError && lawmaticsConnection) {
-      warnings.push({ system: "lawmatics", message: lawmaticsError });
+      warnings.push({ system: "lawmatics_appointment", message: lawmaticsError });
+    }
+    if (contactWarning) {
+      warnings.push({ system: "lawmatics_contact", message: contactWarning });
+    }
+    if (matterWarning) {
+      warnings.push({ system: "lawmatics_matter", message: matterWarning });
     }
     if (googleWarning) {
       warnings.push({ system: "google", message: googleWarning });
     }
 
-    // 9. Log success audit
+    // 10. Log success audit
     await supabase.from("audit_logs").insert({
       action_type: "Booked",
       meeting_id: meeting.id,
@@ -640,6 +676,8 @@ serve(async (req) => {
         start_datetime: startDatetime,
         end_datetime: endDatetime,
         lawmatics_appointment_id: lawmaticsAppointmentId,
+        lawmatics_contact_id: lawmaticsContactId,
+        lawmatics_matter_id: lawmaticsMatterId,
         lawmatics_event_type_id: meeting.meeting_types?.lawmatics_event_type_id || null,
         lawmatics_location_id: meeting.rooms?.lawmatics_location_id || null,
         room_reservation_mode: roomReservationMode,
@@ -656,6 +694,8 @@ serve(async (req) => {
       success: true,
       meetingId: meeting.id,
       lawmaticsAppointmentId,
+      lawmaticsContactId,
+      lawmaticsMatterId,
       googleEventId: googleResult?.eventId ?? null,
       warnings: warnings.length > 0 ? warnings : undefined,
     }), {
