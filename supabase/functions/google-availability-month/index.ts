@@ -251,8 +251,11 @@ serve(async (req) => {
       });
     }
 
+    // STRICT USER SCOPING: Always use the caller's internal user ID
+    // Do NOT allow passing internalUserId to override - this prevents cross-account data leakage
+    const targetInternalUserId = callerUser.id;
+
     const body = await req.json().catch(() => ({}));
-    const targetInternalUserId = body.internalUserId || callerUser.id;
     const month = body.month || new Date().getMonth() + 1; // 1-12
     const year = body.year || new Date().getFullYear();
     const durationMinutes = body.durationMinutes || 60;
@@ -260,24 +263,9 @@ serve(async (req) => {
     const businessEnd = body.businessEnd || "17:00";
     const timezone = body.timezone || "America/New_York";
 
-    // Admin check
-    const { data: adminRole } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .eq("role", "admin")
-      .maybeSingle();
+    console.log("Loading Google connection for caller:", targetInternalUserId);
 
-    const isAdmin = !!adminRole;
-
-    if (targetInternalUserId !== callerUser.id && !isAdmin) {
-      return new Response(JSON.stringify({ error: "Forbidden", days: [] }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Load Google connection
+    // Load Google connection for the CALLER ONLY
     const { data: connection, error: connError } = await supabase
       .from("calendar_connections")
       .select("*")

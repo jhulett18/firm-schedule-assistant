@@ -128,10 +128,11 @@ export function useDashboardData() {
     },
   });
 
-  // Fetch recent meetings
+  // Fetch recent meetings - scoped to current user via RLS (created_by_user_id)
   const { data: recentMeetings, isLoading: loadingMeetings } = useQuery({
-    queryKey: ["recent-meetings"],
+    queryKey: ["recent-meetings", internalUser?.id],
     queryFn: async () => {
+      // RLS automatically filters to meetings created by the current user
       const { data, error } = await supabase
         .from("meetings")
         .select(`
@@ -150,6 +151,7 @@ export function useDashboardData() {
       if (error) throw error;
       return data || [];
     },
+    enabled: !!internalUser?.id,
   });
 
   const systemStatus: SystemStatus = {

@@ -92,9 +92,11 @@ export default function Requests() {
   // Check for detail view from URL
   const detailId = searchParams.get("id");
 
+  // Scope meetings to current user via RLS (created_by_user_id = internalUser.id)
   const { data: meetings, isLoading } = useQuery({
     queryKey: ["booking-requests"],
     queryFn: async () => {
+      // RLS will automatically filter to meetings where created_by_user_id = current user
       const { data, error } = await supabase
         .from("meetings")
         .select(`
