@@ -327,7 +327,60 @@ export async function lawmaticsFindOrCreateContact(
 }
 
 /**
+ * Create a NEW Lawmatics matter for a contact.
+ * Does NOT search for existing matters - always creates a new one.
+ * Returns matter_id.
+ */
+export async function lawmaticsCreateMatter(
+  accessToken: string,
+  contactId: number | string,
+  matterName: string,
+  description?: string
+): Promise<{
+  matterId: number | null;
+  matterIdStr: string | null;
+  created: boolean;
+  error?: string;
+}> {
+  if (!contactId) {
+    return { matterId: null, matterIdStr: null, created: false, error: "No contact ID to create matter" };
+  }
+
+  try {
+    const payload: Record<string, any> = {
+      name: matterName,
+      contact_id: pickNumber(contactId),
+    };
+    
+    // Add description/notes if provided
+    if (description) {
+      payload.description = description;
+    }
+    
+    console.log("[Lawmatics] Creating matter:", JSON.stringify(payload));
+
+    const res = await lawmaticsFetch(accessToken, "POST", "/v1/matters", payload);
+    const { ok, status, json, excerpt } = await lawmaticsJson(res);
+
+    if (!ok) {
+      console.error("[Lawmatics] create matter failed:", status, excerpt);
+      return { matterId: null, matterIdStr: null, created: false, error: `Create failed: ${excerpt}` };
+    }
+
+    const idStr = pickString(json?.data?.id ?? json?.id);
+    const idNum = pickNumber(idStr);
+    console.log("[Lawmatics] Created matter:", idStr);
+    return { matterId: idNum, matterIdStr: idStr, created: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[Lawmatics] create matter exception:", msg);
+    return { matterId: null, matterIdStr: null, created: false, error: msg };
+  }
+}
+
+/**
  * Find a matter by contact ID or email, or create a new one.
+ * @deprecated Use lawmaticsCreateMatter instead for booking flows
  * Returns matter_id.
  */
 export async function lawmaticsFindOrCreateMatter(
@@ -342,7 +395,7 @@ export async function lawmaticsFindOrCreateMatter(
   error?: string;
 }> {
   const email = pickString(attendee?.email);
-  
+
   // 1) If we have a contact ID, try to find their existing matter
   if (contactId) {
     try {
@@ -352,7 +405,7 @@ export async function lawmaticsFindOrCreateMatter(
         `/v1/matters?contact_id=${contactId}&per_page=5`
       );
       const { ok, json } = await lawmaticsJson(res);
-      
+
       if (ok) {
         const matters: any[] = Array.isArray(json?.data) ? json.data : [];
         if (matters.length > 0) {
@@ -367,7 +420,7 @@ export async function lawmaticsFindOrCreateMatter(
       console.log("[Lawmatics] matter search by contact failed:", err);
     }
   }
-  
+
   // 2) Search by email if no contact ID provided or no matter found
   if (email && !contactId) {
     try {
@@ -377,7 +430,7 @@ export async function lawmaticsFindOrCreateMatter(
         `/v1/matters?search=${encodeURIComponent(email)}&per_page=5`
       );
       const { ok, json } = await lawmaticsJson(res);
-      
+
       if (ok) {
         const matters: any[] = Array.isArray(json?.data) ? json.data : [];
         if (matters.length > 0) {
@@ -392,27 +445,27 @@ export async function lawmaticsFindOrCreateMatter(
       console.log("[Lawmatics] matter search by email failed:", err);
     }
   }
-  
+
   // 3) Create new matter
   if (!contactId) {
     return { matterId: null, matterIdStr: null, created: false, error: "No contact ID to create matter" };
   }
-  
+
   try {
     const payload = {
       name: matterName || `Booking - ${attendee?.name || email || "Unknown"}`,
       contact_id: pickNumber(contactId),
     };
     console.log("[Lawmatics] Creating matter:", JSON.stringify(payload));
-    
+
     const res = await lawmaticsFetch(accessToken, "POST", "/v1/matters", payload);
     const { ok, status, json, excerpt } = await lawmaticsJson(res);
-    
+
     if (!ok) {
       console.error("[Lawmatics] create matter failed:", status, excerpt);
       return { matterId: null, matterIdStr: null, created: false, error: `Create failed: ${excerpt}` };
     }
-    
+
     const idStr = pickString(json?.data?.id ?? json?.id);
     const idNum = pickNumber(idStr);
     console.log("[Lawmatics] Created matter:", idStr);
