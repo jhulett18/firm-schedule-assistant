@@ -555,6 +555,17 @@ serve(async (req) => {
     let lawmaticsAppointmentResult: LawmaticsAppointmentResult = {};
     let lawmaticsAppointmentSkipped = false;
 
+    // Always include explicit Lawmatics debug output (non-blocking)
+    const lawmatics_debug: {
+      contact: { attempted: boolean; endpoint: string; status: number; id?: string; body_excerpt?: string };
+      matter: { attempted: boolean; endpoint: string; status: number; id?: string; body_excerpt?: string };
+      event: { attempted: boolean; endpoint: string; status: number; id?: string; body_excerpt?: string };
+    } = {
+      contact: { attempted: false, endpoint: "", status: 0 },
+      matter: { attempted: false, endpoint: "", status: 0 },
+      event: { attempted: false, endpoint: "", status: 0 },
+    };
+
     const { data: lawmaticsConnection } = await supabase
       .from("lawmatics_connections")
       .select("access_token")
@@ -575,13 +586,23 @@ serve(async (req) => {
         lawmaticsAppointmentResult = {
           appointment_id: lawmaticsAppointmentId,
           skipped: true,
-          reason: "Lawmatics appointment already exists for this meeting"
+          reason: "Lawmatics appointment already exists for this meeting",
         };
+
+        // No API call made, but include debug structure
+        lawmatics_debug.event = {
+          attempted: false,
+          endpoint: "/v1/events",
+          status: 0,
+          id: lawmaticsAppointmentId || undefined,
+          body_excerpt: "skipped (already exists)",
+        };
+
         console.log("Lawmatics appointment already exists, skipping creation:", lawmaticsAppointmentId);
-        
+
         // TODO: Optionally update existing appointment to ensure all participants are assigned
         // This would require implementing a PATCH call to update attendees/users
-        
+
       } else {
         await writeLog(supabase, meeting.id, runId, "lawmatics_resolve_user_start", "info", "Resolving Lawmatics owner user by email", {
           email: hostAttorney?.email || null,
@@ -646,17 +667,28 @@ serve(async (req) => {
           }
         );
 
+        // Populate explicit event debug info (best-effort)
+        const eventPostAttempt = (appointment.attempts || []).find((a) => a.method === "POST" && a.endpoint === "/v1/events");
+        const lastEventAttempt = (appointment.attempts || [])[(appointment.attempts || []).length - 1];
+        lawmatics_debug.event = {
+          attempted: Boolean(eventPostAttempt || (appointment.attempts && appointment.attempts.length > 0)),
+          endpoint: (eventPostAttempt?.endpoint || lastEventAttempt?.endpoint || "/v1/events"),
+          status: (eventPostAttempt?.status ?? lastEventAttempt?.status ?? 0),
+          id: appointment.createdId || undefined,
+          body_excerpt: (eventPostAttempt?.body_excerpt || lastEventAttempt?.body_excerpt || appointment.error || undefined),
+        };
+
         if (appointment.createdId && appointment.persisted) {
           lawmaticsAppointmentId = appointment.createdId;
           lawmaticsAppointmentResult = {
             appointment_id: lawmaticsAppointmentId,
             created: true,
-            assigned_user_ids: resolvedParticipantLawmaticsIds
+            assigned_user_ids: resolvedParticipantLawmaticsIds,
           };
         } else {
           lawmaticsError = appointment.error || "Lawmatics appointment did not persist times/owner";
           lawmaticsAppointmentResult = {
-            error: lawmaticsError
+            error: lawmaticsError,
           };
           await writeLog(supabase, meeting.id, runId, "lawmatics_final_status", "error", "Lawmatics appointment did not persist", {
             createdId: appointment.createdId,
@@ -746,30 +778,39 @@ serve(async (req) => {
         const clientFirstName = tokens[0] || "Client";
         const clientLastName = tokens.slice(1).join(" ") || "Booking";
 
-        const contactResult = await lawmaticsFindOrCreateContact(accessToken, {
-          email: clientEmail,
-          name: clientName,
-          first_name: clientFirstName,
-          last_name: clientLastName,
-        });
+         const contactResult = await lawmaticsFindOrCreateContact(accessToken, {
+           email: clientEmail,
+           name: clientName,
+           first_name: clientFirstName,
+           last_name: clientLastName,
+         });
 
-        if (contactResult.contactIdStr) {
-          lawmaticsContactId = contactResult.contactIdStr;
-          lawmaticsContactCreated = contactResult.created;
-          console.log(
-            "Lawmatics contact resolved:",
-            lawmaticsContactId,
-            contactResult.created ? "(created)" : "(existing)"
-          );
+         const lastContactAttempt = contactResult.attempts[contactResult.attempts.length - 1];
+         lawmatics_debug.contact = {
+           attempted: true,
+           endpoint: lastContactAttempt?.endpoint || "/v1/contacts",
+           status: lastContactAttempt?.status ?? 0,
+           id: contactResult.contactIdStr || undefined,
+           body_excerpt: lastContactAttempt?.body_excerpt || contactResult.error || undefined,
+         };
 
-          // Persist contact ID immediately
-          await supabase
-            .from("meetings")
-            .update({
-              lawmatics_contact_id: lawmaticsContactId,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", meeting.id);
+         if (contactResult.contactIdStr) {
+           lawmaticsContactId = contactResult.contactIdStr;
+           lawmaticsContactCreated = contactResult.created;
+           console.log(
+             "Lawmatics contact resolved:",
+             lawmaticsContactId,
+             contactResult.created ? "(created)" : "(existing)"
+           );
+
+           // Persist contact ID immediately
+           await supabase
+             .from("meetings")
+             .update({
+               lawmatics_contact_id: lawmaticsContactId,
+               updated_at: new Date().toISOString(),
+             })
+             .eq("id", meeting.id);
 
           // B) Create Lawmatics Matter (Prospect) (REQUIRED step - not optional)
           const meetingTypeName = meeting.meeting_types?.name || "Meeting";
@@ -814,6 +855,15 @@ serve(async (req) => {
               body_excerpt: a.body_excerpt,
             }));
           }
+
+          const lastMatterAttempt = matterAttempts[matterAttempts.length - 1];
+          lawmatics_debug.matter = {
+            attempted: true,
+            endpoint: matterResult.endpointUsed || lastMatterAttempt?.endpoint || "",
+            status: lastMatterAttempt?.status ?? 0,
+            id: matterResult.matterIdStr || undefined,
+            body_excerpt: lastMatterAttempt?.body_excerpt || (matterResult.warnings?.join("; ") || undefined),
+          };
 
           if (matterResult.matterIdStr) {
             lawmaticsMatterId = matterResult.matterIdStr;
@@ -900,6 +950,22 @@ serve(async (req) => {
       warnings.push(`[google] ${gw}`);
     }
 
+    // Persist Lawmatics debug snapshot on every run (non-blocking)
+    try {
+      await supabase
+        .from("meetings")
+        .update({
+          lawmatics_debug: {
+            lawmatics: lawmatics_debug,
+            updated_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", meeting.id);
+    } catch (e) {
+      console.warn("Failed to persist meetings.lawmatics_debug (non-blocking)", e);
+    }
+
     // 10. Log success audit
     await supabase.from("audit_logs").insert({
       action_type: "Booked",
@@ -979,6 +1045,7 @@ serve(async (req) => {
         success: true,
         meetingId: meeting.id,
         lawmatics: lawmaticsInfo,
+        lawmatics_debug,
         // Legacy fields for backwards compatibility
         lawmaticsAppointmentId,
         lawmaticsAppointment: lawmaticsAppointmentInfo,

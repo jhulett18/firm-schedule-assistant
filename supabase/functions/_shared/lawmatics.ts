@@ -48,7 +48,7 @@ export async function lawmaticsJson(res: Response): Promise<LawmaticsJsonResult>
     status: res.status,
     text,
     json,
-    excerpt: (text || "").slice(0, 500),
+    excerpt: (text || "").slice(0, 1000),
   };
 }
 
@@ -312,48 +312,52 @@ export async function lawmaticsFindOrCreateContact(
   contactId: number | null;
   contactIdStr: string | null;
   created: boolean;
+  attempts: Array<{ endpoint: string; method: string; status: number; body_excerpt: string }>;
   error?: string;
 }> {
+  const attempts: Array<{ endpoint: string; method: string; status: number; body_excerpt: string }> = [];
+
   const email = pickString(attendee?.email);
   if (!email) {
-    return { contactId: null, contactIdStr: null, created: false, error: "No email provided" };
+    return { contactId: null, contactIdStr: null, created: false, attempts, error: "No email provided" };
   }
 
   // 1) Search for existing contact
   try {
-    const res = await lawmaticsFetch(
-      accessToken,
-      "GET",
-      `/v1/contacts?search=${encodeURIComponent(email)}&per_page=10`
-    );
+    const endpoint = `/v1/contacts?search=${encodeURIComponent(email)}&per_page=10`;
+    const res = await lawmaticsFetch(accessToken, "GET", endpoint);
     const { ok, status, json, excerpt } = await lawmaticsJson(res);
 
+    attempts.push({ endpoint, method: "GET", status, body_excerpt: excerpt });
+
     if (ok) {
-      const contacts: any[] = Array.isArray(json?.data) 
-        ? json.data 
-        : Array.isArray(json?.contacts) 
-          ? json.contacts 
+      const contacts: any[] = Array.isArray(json?.data)
+        ? json.data
+        : Array.isArray(json?.contacts)
+          ? json.contacts
           : [];
-      
+
       // Find exact email match (case-insensitive)
       const normalizedEmail = email.toLowerCase();
-      const exactMatch = contacts.find(c => {
+      const exactMatch = contacts.find((c) => {
         const attrs = c?.attributes ?? c;
         const contactEmail = pickString(attrs?.email);
         return contactEmail?.toLowerCase() === normalizedEmail;
       });
-      
+
       if (exactMatch) {
         const idStr = pickString(exactMatch?.id ?? exactMatch?.data?.id);
         const idNum = pickNumber(idStr);
         console.log("[Lawmatics] Found existing contact:", idStr);
-        return { contactId: idNum, contactIdStr: idStr, created: false };
+        return { contactId: idNum, contactIdStr: idStr, created: false, attempts };
       }
     } else {
       console.log("[Lawmatics] contact search failed:", status, excerpt);
     }
   } catch (err) {
-    console.log("[Lawmatics] contact search exception:", err);
+    const msg = err instanceof Error ? err.message : String(err);
+    attempts.push({ endpoint: "/v1/contacts?search=...", method: "GET", status: 0, body_excerpt: msg });
+    console.log("[Lawmatics] contact search exception:", msg);
   }
 
   // 2) Create new contact
@@ -365,23 +369,27 @@ export async function lawmaticsFindOrCreateContact(
   try {
     const payload = { first_name, last_name, email };
     console.log("[Lawmatics] Creating contact:", JSON.stringify(payload));
-    
-    const res = await lawmaticsFetch(accessToken, "POST", "/v1/contacts", payload);
+
+    const endpoint = "/v1/contacts";
+    const res = await lawmaticsFetch(accessToken, "POST", endpoint, payload);
     const { ok, status, json, excerpt } = await lawmaticsJson(res);
+
+    attempts.push({ endpoint, method: "POST", status, body_excerpt: excerpt });
 
     if (!ok) {
       console.error("[Lawmatics] create contact failed:", status, excerpt);
-      return { contactId: null, contactIdStr: null, created: false, error: `Create failed: ${excerpt}` };
+      return { contactId: null, contactIdStr: null, created: false, attempts, error: `Create failed: ${excerpt}` };
     }
 
     const idStr = pickString(json?.data?.id ?? json?.id);
     const idNum = pickNumber(idStr);
     console.log("[Lawmatics] Created contact:", idStr);
-    return { contactId: idNum, contactIdStr: idStr, created: true };
+    return { contactId: idNum, contactIdStr: idStr, created: true, attempts };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[Lawmatics] create contact exception:", msg);
-    return { contactId: null, contactIdStr: null, created: false, error: msg };
+    attempts.push({ endpoint: "/v1/contacts", method: "POST", status: 0, body_excerpt: msg });
+    return { contactId: null, contactIdStr: null, created: false, attempts, error: msg };
   }
 }
 
@@ -935,6 +943,8 @@ export async function createOrRepairLawmaticsAppointment(
   params: AppointmentParams,
   log: LogFn
 ): Promise<AppointmentResult> {
+  const attempts: Array<{ endpoint: string; method: string; status: number; body_excerpt: string }> = [];
+
   const { date, time } = toLocalDateTimeParts(params.startDatetime, params.timezone);
   const { time: endTime } = toLocalDateTimeParts(params.endDatetime, params.timezone);
 
@@ -966,64 +976,117 @@ export async function createOrRepairLawmaticsAppointment(
   if (params.contactId) payload.contact_id = params.contactId;
 
   try {
-    const res = await lawmaticsFetch(accessToken, "POST", "/v1/events", payload);
-    const { ok, status, json, excerpt } = await lawmaticsJson(res);
+    // Create
+    {
+      const endpoint = "/v1/events";
+      const res = await lawmaticsFetch(accessToken, "POST", endpoint, payload);
+      const { ok, status, json, excerpt } = await lawmaticsJson(res);
+      attempts.push({ endpoint, method: "POST", status, body_excerpt: excerpt });
 
-    if (!ok) {
-      await log("lawmatics_create_event_failed", "error", "Failed to create Lawmatics event", {
-        status,
-        excerpt,
-      });
-      return { createdId: null, persisted: false, readback: null, error: `Create failed: ${excerpt}` };
-    }
+      if (!ok) {
+        await log("lawmatics_create_event_failed", "error", "Failed to create Lawmatics event", {
+          status,
+          excerpt,
+        });
+        return {
+          createdId: null,
+          persisted: false,
+          readback: null,
+          error: `Create failed: ${excerpt}`,
+          attempts,
+          timezoneUsed: params.timezone,
+          ownerUserIdUsed: params.userId ?? null,
+          computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+        };
+      }
 
-    const createdId = pickString(json?.data?.id ?? json?.id);
-    
-    if (!createdId) {
-      await log("lawmatics_create_event_no_id", "error", "Lawmatics event created but no ID returned", {
-        json,
-      });
-      return { createdId: null, persisted: false, readback: null, error: "No event ID returned" };
-    }
+      const createdId = pickString(json?.data?.id ?? json?.id);
+      if (!createdId) {
+        await log("lawmatics_create_event_no_id", "error", "Lawmatics event created but no ID returned", { json });
+        return {
+          createdId: null,
+          persisted: false,
+          readback: null,
+          error: "No event ID returned",
+          attempts,
+          timezoneUsed: params.timezone,
+          ownerUserIdUsed: params.userId ?? null,
+          computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+        };
+      }
 
-    await log("lawmatics_create_event_success", "success", `Lawmatics event created: ${createdId}`, {
-      event_id: createdId,
-    });
-
-    // Read back and verify
-    const readback = await lawmaticsReadEvent(accessToken, createdId);
-    
-    if (!readback) {
-      await log("lawmatics_readback_failed", "warn", "Could not read back created event", {
+      await log("lawmatics_create_event_success", "success", `Lawmatics event created: ${createdId}`, {
         event_id: createdId,
       });
-      return { createdId, persisted: false, readback: null, error: "Readback failed" };
+
+      // Readback attempt for debug (status/body)
+      try {
+        const endpointRead = `/v1/events/${encodeURIComponent(createdId)}`;
+        const readRes = await lawmaticsFetch(accessToken, "GET", endpointRead);
+        const readJson = await lawmaticsJson(readRes);
+        attempts.push({ endpoint: endpointRead, method: "GET", status: readJson.status, body_excerpt: readJson.excerpt });
+      } catch (readErr) {
+        const msg = readErr instanceof Error ? readErr.message : String(readErr);
+        attempts.push({ endpoint: "/v1/events/:id", method: "GET", status: 0, body_excerpt: msg });
+      }
+
+      // Read back and verify (normalized)
+      const readback = await lawmaticsReadEvent(accessToken, createdId);
+      if (!readback) {
+        await log("lawmatics_readback_failed", "warn", "Could not read back created event", {
+          event_id: createdId,
+        });
+        return {
+          createdId,
+          persisted: false,
+          readback: null,
+          error: "Readback failed",
+          attempts,
+          timezoneUsed: params.timezone,
+          ownerUserIdUsed: params.userId ?? null,
+          computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+        };
+      }
+
+      // Check if times and owner persisted
+      const timesOk = readback.start_date === date && readback.start_time === time;
+      const ownerOk = !params.userId || readback.user_id === String(params.userId);
+
+      if (!timesOk || !ownerOk) {
+        await log("lawmatics_readback_mismatch", "warn", "Event created but fields may not have persisted correctly", {
+          expected_date: date,
+          expected_time: time,
+          expected_user_id: params.userId,
+          actual_date: readback.start_date,
+          actual_time: readback.start_time,
+          actual_user_id: readback.user_id,
+        });
+      }
+
+      return {
+        createdId,
+        persisted: timesOk && ownerOk,
+        readback,
+        attempts,
+        timezoneUsed: params.timezone,
+        ownerUserIdUsed: params.userId ?? null,
+        computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+      };
     }
-
-    // Check if times and owner persisted
-    const timesOk = readback.start_date === date && readback.start_time === time;
-    const ownerOk = !params.userId || readback.user_id === String(params.userId);
-
-    if (!timesOk || !ownerOk) {
-      await log("lawmatics_readback_mismatch", "warn", "Event created but fields may not have persisted correctly", {
-        expected_date: date,
-        expected_time: time,
-        expected_user_id: params.userId,
-        actual_date: readback.start_date,
-        actual_time: readback.start_time,
-        actual_user_id: readback.user_id,
-      });
-    }
-
-    return { 
-      createdId, 
-      persisted: timesOk && ownerOk, 
-      readback,
-    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await log("lawmatics_create_event_exception", "error", `Exception creating event: ${msg}`, {});
-    return { createdId: null, persisted: false, readback: null, error: msg };
+    attempts.push({ endpoint: "/v1/events", method: "POST", status: 0, body_excerpt: msg });
+    return {
+      createdId: null,
+      persisted: false,
+      readback: null,
+      error: msg,
+      attempts,
+      timezoneUsed: params.timezone,
+      ownerUserIdUsed: params.userId ?? null,
+      computed: { start_date: date, start_time: time, end_date: date, end_time: endTime },
+    };
   }
 }
 

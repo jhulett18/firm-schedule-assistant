@@ -385,6 +385,7 @@ export type Database = {
             | null
           lawmatics_appointment_id: string | null
           lawmatics_contact_id: string | null
+          lawmatics_debug: Json | null
           lawmatics_matter_id: string | null
           location_mode: Database["public"]["Enums"]["location_mode"]
           m365_event_id: string | null
@@ -419,6 +420,7 @@ export type Database = {
             | null
           lawmatics_appointment_id?: string | null
           lawmatics_contact_id?: string | null
+          lawmatics_debug?: Json | null
           lawmatics_matter_id?: string | null
           location_mode?: Database["public"]["Enums"]["location_mode"]
           m365_event_id?: string | null
@@ -453,6 +455,7 @@ export type Database = {
             | null
           lawmatics_appointment_id?: string | null
           lawmatics_contact_id?: string | null
+          lawmatics_debug?: Json | null
           lawmatics_matter_id?: string | null
           location_mode?: Database["public"]["Enums"]["location_mode"]
           m365_event_id?: string | null
