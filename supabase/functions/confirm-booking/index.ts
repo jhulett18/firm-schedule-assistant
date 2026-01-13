@@ -806,12 +806,14 @@ serve(async (req) => {
 
           console.log("[Lawmatics] Creating matter for contact:", lawmaticsContactId, "with title:", matterTitle);
           
-          const matterResult = await lawmaticsCreateMatter(
-            accessToken,
-            lawmaticsContactId,
-            matterTitle,
-            matterDescription
-          );
+          const matterResult = await lawmaticsCreateMatter(accessToken, {
+            contactId: lawmaticsContactId,
+            email: clientEmail,
+            firstName: clientFirstName,
+            lastName: clientLastName,
+            caseTitle: matterTitle,
+            notes: matterDescription,
+          });
 
           // Capture attempt details for response
           if (matterResult.attempts) {
