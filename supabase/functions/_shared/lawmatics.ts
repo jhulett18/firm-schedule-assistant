@@ -326,61 +326,124 @@ export async function lawmaticsFindOrCreateContact(
   }
 }
 
+export interface LawmaticsMatterResult {
+  matterId: number | null;
+  matterIdStr: string | null;
+  created: boolean;
+  error?: string;
+  warnings?: string[];
+  attempts?: Array<{ endpoint: string; status: number; excerpt: string }>;
+}
+
 /**
- * Create a NEW Lawmatics matter (prospect) for a contact.
- * Does NOT search for existing matters - always creates a new one.
- * Uses /v1/prospects endpoint (Lawmatics calls matters "prospects" in their API).
- * Returns matter_id.
+ * Create a NEW Lawmatics matter for a contact.
+ * Implements fallback: tries /v1/prospects first, then /v1/matters if 404.
+ * Returns matter_id with detailed attempt info for debugging.
  */
 export async function lawmaticsCreateMatter(
   accessToken: string,
   contactId: number | string,
   matterName: string,
   description?: string
-): Promise<{
-  matterId: number | null;
-  matterIdStr: string | null;
-  created: boolean;
-  error?: string;
-}> {
+): Promise<LawmaticsMatterResult> {
   if (!contactId) {
-    return { matterId: null, matterIdStr: null, created: false, error: "No contact ID to create matter" };
+    return { 
+      matterId: null, 
+      matterIdStr: null, 
+      created: false, 
+      error: "No contact ID to create matter",
+      warnings: ["No contact ID provided for matter creation"]
+    };
   }
 
+  const attempts: Array<{ endpoint: string; status: number; excerpt: string }> = [];
+  const warnings: string[] = [];
+  
+  // Payload for /v1/prospects endpoint (uses case_title, notes)
+  const prospectsPayload: Record<string, any> = {
+    case_title: matterName,
+    contact_id: pickNumber(contactId),
+  };
+  if (description) {
+    prospectsPayload.notes = description;
+  }
+  
+  // Payload for /v1/matters endpoint (uses name, description)
+  const mattersPayload: Record<string, any> = {
+    name: matterName,
+    contact_id: pickNumber(contactId),
+  };
+  if (description) {
+    mattersPayload.description = description;
+  }
+
+  // ATTEMPT 1: Try /v1/prospects (Lawmatics' current endpoint for matters)
   try {
-    // Lawmatics API uses "prospects" for matters
-    // The case_title field is the matter name/title
-    // contact_id links the matter to an existing contact
-    const payload: Record<string, any> = {
-      case_title: matterName,
-      contact_id: pickNumber(contactId),
-    };
+    console.log("[Lawmatics] Creating matter via /v1/prospects:", JSON.stringify(prospectsPayload));
     
-    // Add notes if description provided
-    if (description) {
-      payload.notes = description;
+    const res1 = await lawmaticsFetch(accessToken, "POST", "/v1/prospects", prospectsPayload);
+    const result1 = await lawmaticsJson(res1);
+    
+    attempts.push({ endpoint: "/v1/prospects", status: result1.status, excerpt: result1.excerpt });
+    
+    if (result1.ok) {
+      const idStr = pickString(result1.json?.data?.id ?? result1.json?.id);
+      const idNum = pickNumber(idStr);
+      console.log("[Lawmatics] Created matter via /v1/prospects:", idStr);
+      return { matterId: idNum, matterIdStr: idStr, created: true, attempts };
     }
     
-    console.log("[Lawmatics] Creating matter (prospect):", JSON.stringify(payload));
-
-    // IMPORTANT: Lawmatics uses /v1/prospects endpoint for matters, NOT /v1/matters
-    const res = await lawmaticsFetch(accessToken, "POST", "/v1/prospects", payload);
-    const { ok, status, json, excerpt } = await lawmaticsJson(res);
-
-    if (!ok) {
-      console.error("[Lawmatics] create matter failed:", status, excerpt);
-      return { matterId: null, matterIdStr: null, created: false, error: `Create failed: ${excerpt}` };
+    // If 404, try fallback endpoint
+    if (result1.status === 404) {
+      warnings.push(`/v1/prospects returned 404, trying /v1/matters fallback`);
+      console.log("[Lawmatics] /v1/prospects returned 404, trying /v1/matters fallback");
+    } else {
+      // Non-404 failure - still try fallback but log warning
+      warnings.push(`/v1/prospects failed (${result1.status}): ${result1.excerpt}`);
+      console.warn("[Lawmatics] /v1/prospects failed:", result1.status, result1.excerpt);
     }
-
-    const idStr = pickString(json?.data?.id ?? json?.id);
-    const idNum = pickNumber(idStr);
-    console.log("[Lawmatics] Created matter (prospect):", idStr);
-    return { matterId: idNum, matterIdStr: idStr, created: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[Lawmatics] create matter exception:", msg);
-    return { matterId: null, matterIdStr: null, created: false, error: msg };
+    warnings.push(`/v1/prospects exception: ${msg}`);
+    console.warn("[Lawmatics] /v1/prospects exception:", msg);
+    attempts.push({ endpoint: "/v1/prospects", status: 0, excerpt: msg });
   }
+
+  // ATTEMPT 2: Fallback to /v1/matters
+  try {
+    console.log("[Lawmatics] Creating matter via /v1/matters fallback:", JSON.stringify(mattersPayload));
+    
+    const res2 = await lawmaticsFetch(accessToken, "POST", "/v1/matters", mattersPayload);
+    const result2 = await lawmaticsJson(res2);
+    
+    attempts.push({ endpoint: "/v1/matters", status: result2.status, excerpt: result2.excerpt });
+    
+    if (result2.ok) {
+      const idStr = pickString(result2.json?.data?.id ?? result2.json?.id);
+      const idNum = pickNumber(idStr);
+      console.log("[Lawmatics] Created matter via /v1/matters fallback:", idStr);
+      return { matterId: idNum, matterIdStr: idStr, created: true, warnings, attempts };
+    }
+    
+    warnings.push(`/v1/matters fallback failed (${result2.status}): ${result2.excerpt}`);
+    console.error("[Lawmatics] /v1/matters fallback also failed:", result2.status, result2.excerpt);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    warnings.push(`/v1/matters exception: ${msg}`);
+    console.error("[Lawmatics] /v1/matters exception:", msg);
+    attempts.push({ endpoint: "/v1/matters", status: 0, excerpt: msg });
+  }
+
+  // Both endpoints failed
+  const errorSummary = `Matter creation failed. Attempts: ${attempts.map(a => `${a.endpoint}=${a.status}`).join(", ")}`;
+  return { 
+    matterId: null, 
+    matterIdStr: null, 
+    created: false, 
+    error: errorSummary,
+    warnings,
+    attempts
+  };
 }
 
 /**
