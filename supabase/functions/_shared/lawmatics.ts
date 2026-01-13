@@ -326,13 +326,20 @@ export async function lawmaticsFindOrCreateContact(
   }
 }
 
+export interface LawmaticsMatterAttempt {
+  endpoint: string;
+  payload_shape: "flat" | "wrapped" | "jsonapi";
+  status: number;
+  excerpt: string;
+}
+
 export interface LawmaticsMatterResult {
   matterId: number | null;
   matterIdStr: string | null;
   created: boolean;
   error?: string;
   warnings?: string[];
-  attempts?: Array<{ endpoint: string; method: string; payload: string; status: number; excerpt: string }>;
+  attempts?: LawmaticsMatterAttempt[];
 }
 
 export interface MatterCreateParams {
@@ -344,172 +351,187 @@ export interface MatterCreateParams {
   notes?: string | null;
 }
 
+type ProspectBasePayload = {
+  first_name: string;
+  last_name: string;
+  email: string;
+  case_title: string;
+  notes?: string;
+  match_contact_by?: "email";
+  contact_id?: number | string;
+};
+
+function normalizeProspectBasePayload(params: MatterCreateParams): ProspectBasePayload {
+  const email = pickString(params.email) || "";
+  const first_name = pickString(params.firstName) || "Client";
+  const last_name = pickString(params.lastName) || "Booking";
+
+  const base: ProspectBasePayload = {
+    first_name,
+    last_name,
+    email,
+    case_title: params.caseTitle,
+  };
+
+  const notes = pickString(params.notes);
+  if (notes) base.notes = notes;
+
+  // Prefer match_contact_by=email to dedupe/link by email (as documented)
+  if (email) base.match_contact_by = "email";
+
+  // Also include contact_id if we have it (acts as a fallback / explicit link)
+  const contactIdNum = pickNumber(params.contactId);
+  if (contactIdNum) base.contact_id = contactIdNum;
+  else if (pickString(params.contactId)) base.contact_id = String(params.contactId);
+
+  return base;
+}
+
+function buildPayloadShapes<T extends Record<string, any>>(
+  base: T,
+  resourceType: "prospect" | "matter",
+  wrappedKey: "prospect" | "matter"
+): Array<{ shape: LawmaticsMatterAttempt["payload_shape"]; payload: any }> {
+  return [
+    { shape: "flat", payload: base },
+    { shape: "wrapped", payload: { [wrappedKey]: base } },
+    { shape: "jsonapi", payload: { data: { type: resourceType, attributes: base } } },
+  ];
+}
+
+async function tryCreateWithShapes(
+  accessToken: string,
+  endpoint: string,
+  shapes: Array<{ shape: LawmaticsMatterAttempt["payload_shape"]; payload: any }>,
+  attempts: LawmaticsMatterAttempt[],
+  warnings: string[],
+  stopOn404: boolean
+): Promise<{ ok: boolean; status: number; idStr: string | null; endpointNotFound: boolean }>
+{
+  for (const { shape, payload } of shapes) {
+    try {
+      console.log(`[Lawmatics] POST ${endpoint} (${shape}) payload:`, JSON.stringify(payload));
+      const res = await lawmaticsFetch(accessToken, "POST", endpoint, payload);
+      const result = await lawmaticsJson(res);
+
+      attempts.push({
+        endpoint,
+        payload_shape: shape,
+        status: result.status,
+        excerpt: result.excerpt,
+      });
+
+      if (result.ok) {
+        const idStr = pickString(result.json?.data?.id ?? result.json?.id);
+        return { ok: true, status: result.status, idStr, endpointNotFound: false };
+      }
+
+      // Always record detailed failure for debugging
+      warnings.push(
+        `[Lawmatics] Matter create failed at ${endpoint} (${shape}) status=${result.status} body=${result.excerpt}`
+      );
+
+      if (result.status === 404 && stopOn404) {
+        return { ok: false, status: 404, idStr: null, endpointNotFound: true };
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      attempts.push({ endpoint, payload_shape: shape, status: 0, excerpt: msg });
+      warnings.push(`[Lawmatics] Matter create exception at ${endpoint} (${shape}): ${msg}`);
+    }
+  }
+
+  return { ok: false, status: attempts.length ? attempts[attempts.length - 1].status : 0, idStr: null, endpointNotFound: false };
+}
+
 /**
- * Create a NEW Lawmatics matter (prospect) for a contact.
- * Per Lawmatics docs, POST /v1/prospects with:
- * - contact_id: link to existing contact by ID
- * - match_contact_by: "email" to auto-link/dedupe by email
- * - first_name, last_name, email: for contact info
- * - case_title: the matter/case name
- * - notes: optional description
- * 
- * Implements fallback: tries /v1/prospects first, then /v1/matters if 404.
- * Returns matter_id with detailed attempt info for debugging.
+ * Create a NEW Lawmatics Matter (Prospect) per the official "Matters (Prospects)" docs.
+ *
+ * Strategy:
+ * - Primary endpoint: POST /v1/prospects
+ * - If and only if we get a 404 (endpoint not present for this account), fallback: POST /v1/matters
+ * - For each endpoint, try payload shapes in this exact order:
+ *   1) flat
+ *   2) wrapped
+ *   3) JSON:API
+ *
+ * Non-blocking by design: returns attempts + warnings so callers can surface exact failure reasons.
  */
 export async function lawmaticsCreateMatter(
   accessToken: string,
   params: MatterCreateParams
 ): Promise<LawmaticsMatterResult> {
-  const { contactId, email, firstName, lastName, caseTitle, notes } = params;
-  
-  if (!contactId && !email) {
-    return { 
-      matterId: null, 
-      matterIdStr: null, 
-      created: false, 
-      error: "No contact_id or email provided for matter creation",
-      warnings: ["Either contact_id or email is required to create a matter"]
+  const base = normalizeProspectBasePayload(params);
+
+  // Required fields guard (per docs: must include identity + case_title)
+  if (!base.email || !base.case_title || !base.first_name || !base.last_name) {
+    return {
+      matterId: null,
+      matterIdStr: null,
+      created: false,
+      error: "Missing required fields for Matter (Prospect) creation",
+      warnings: [
+        `required=email,first_name,last_name,case_title; got email=${Boolean(base.email)} first_name=${Boolean(base.first_name)} last_name=${Boolean(base.last_name)} case_title=${Boolean(base.case_title)}`,
+      ],
+      attempts: [],
     };
   }
 
-  const attempts: Array<{ endpoint: string; method: string; payload: string; status: number; excerpt: string }> = [];
+  const attempts: LawmaticsMatterAttempt[] = [];
   const warnings: string[] = [];
-  
-  // Build payload for /v1/prospects endpoint per Lawmatics docs
-  // The prospects endpoint supports:
-  // - case_title (required for matter name)
-  // - contact_id OR match_contact_by=email with email field
-  // - first_name, last_name for contact info
-  // - notes for description
-  const prospectsPayload: Record<string, any> = {
-    case_title: caseTitle,
-  };
-  
-  // Prefer contact_id if available, otherwise use match_contact_by=email
-  if (contactId) {
-    const numId = pickNumber(contactId);
-    if (numId) {
-      prospectsPayload.contact_id = numId;
-    } else {
-      // String ID - try as-is
-      prospectsPayload.contact_id = contactId;
-    }
-  } else if (email) {
-    // Use match_contact_by to auto-link by email (per docs v1.4.0)
-    prospectsPayload.match_contact_by = "email";
-    prospectsPayload.email = email;
-  }
-  
-  // Always include name fields if provided (helps Lawmatics create/update contact)
-  if (firstName) prospectsPayload.first_name = firstName;
-  if (lastName) prospectsPayload.last_name = lastName;
-  if (email && contactId) prospectsPayload.email = email; // Also include email even with contact_id
-  if (notes) prospectsPayload.notes = notes;
 
-  console.log("[Lawmatics] Creating matter via /v1/prospects with payload:", JSON.stringify(prospectsPayload));
-
-  // ATTEMPT 1: Try /v1/prospects (Lawmatics' primary endpoint for matters)
-  try {
-    const res1 = await lawmaticsFetch(accessToken, "POST", "/v1/prospects", prospectsPayload);
-    const result1 = await lawmaticsJson(res1);
-    
-    attempts.push({ 
-      endpoint: "/v1/prospects", 
-      method: "POST",
-      payload: JSON.stringify(prospectsPayload),
-      status: result1.status, 
-      excerpt: result1.excerpt 
-    });
-    
-    console.log("[Lawmatics] /v1/prospects response:", result1.status, result1.excerpt);
-    
-    if (result1.ok) {
-      const idStr = pickString(result1.json?.data?.id ?? result1.json?.id);
-      const idNum = pickNumber(idStr);
-      console.log("[Lawmatics] Successfully created matter via /v1/prospects:", idStr);
-      return { matterId: idNum, matterIdStr: idStr, created: true, attempts };
-    }
-    
-    // If 404 or other error, try fallback endpoint
-    if (result1.status === 404) {
-      warnings.push(`/v1/prospects returned 404 (endpoint may not exist), trying /v1/matters fallback`);
-      console.log("[Lawmatics] /v1/prospects returned 404, trying /v1/matters fallback");
-    } else {
-      // Non-404 failure - log warning but still try fallback
-      warnings.push(`/v1/prospects failed (${result1.status}): ${result1.excerpt}`);
-      console.warn("[Lawmatics] /v1/prospects failed:", result1.status, result1.excerpt);
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    warnings.push(`/v1/prospects exception: ${msg}`);
-    console.warn("[Lawmatics] /v1/prospects exception:", msg);
-    attempts.push({ endpoint: "/v1/prospects", method: "POST", payload: JSON.stringify(prospectsPayload), status: 0, excerpt: msg });
-  }
-
-  // ATTEMPT 2: Fallback to /v1/matters with different payload structure
-  // The /v1/matters endpoint uses "name" instead of "case_title"
-  const mattersPayload: Record<string, any> = {
-    name: caseTitle,
-  };
-  
-  if (contactId) {
-    const numId = pickNumber(contactId);
-    if (numId) {
-      mattersPayload.contact_id = numId;
-    } else {
-      mattersPayload.contact_id = contactId;
-    }
-  } else if (email) {
-    mattersPayload.match_contact_by = "email";
-    mattersPayload.email = email;
-  }
-  
-  if (firstName) mattersPayload.first_name = firstName;
-  if (lastName) mattersPayload.last_name = lastName;
-  if (email && contactId) mattersPayload.email = email;
-  if (notes) mattersPayload.description = notes; // /v1/matters uses "description" instead of "notes"
-
-  console.log("[Lawmatics] Creating matter via /v1/matters fallback with payload:", JSON.stringify(mattersPayload));
-
-  try {
-    const res2 = await lawmaticsFetch(accessToken, "POST", "/v1/matters", mattersPayload);
-    const result2 = await lawmaticsJson(res2);
-    
-    attempts.push({ 
-      endpoint: "/v1/matters", 
-      method: "POST",
-      payload: JSON.stringify(mattersPayload),
-      status: result2.status, 
-      excerpt: result2.excerpt 
-    });
-    
-    console.log("[Lawmatics] /v1/matters response:", result2.status, result2.excerpt);
-    
-    if (result2.ok) {
-      const idStr = pickString(result2.json?.data?.id ?? result2.json?.id);
-      const idNum = pickNumber(idStr);
-      console.log("[Lawmatics] Successfully created matter via /v1/matters fallback:", idStr);
-      return { matterId: idNum, matterIdStr: idStr, created: true, warnings, attempts };
-    }
-    
-    warnings.push(`/v1/matters fallback failed (${result2.status}): ${result2.excerpt}`);
-    console.error("[Lawmatics] /v1/matters fallback also failed:", result2.status, result2.excerpt);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    warnings.push(`/v1/matters exception: ${msg}`);
-    console.error("[Lawmatics] /v1/matters exception:", msg);
-    attempts.push({ endpoint: "/v1/matters", method: "POST", payload: JSON.stringify(mattersPayload), status: 0, excerpt: msg });
-  }
-
-  // Both endpoints failed - return detailed error info
-  const errorSummary = `Matter creation failed. Tried ${attempts.length} endpoints: ${attempts.map(a => `${a.endpoint}(${a.status})`).join(", ")}`;
-  return { 
-    matterId: null, 
-    matterIdStr: null, 
-    created: false, 
-    error: errorSummary,
+  // 1) Try the docs endpoint for Matters (Prospects)
+  const prospectShapes = buildPayloadShapes(base, "prospect", "prospect");
+  const r1 = await tryCreateWithShapes(
+    accessToken,
+    "/v1/prospects",
+    prospectShapes,
+    attempts,
     warnings,
-    attempts
+    true // stopOn404: if endpoint missing, don't keep trying other shapes
+  );
+
+  if (r1.ok) {
+    const idNum = pickNumber(r1.idStr);
+    return { matterId: idNum, matterIdStr: r1.idStr, created: true, attempts, warnings };
+  }
+
+  // Only fallback to /v1/matters when /v1/prospects is not found.
+  if (!r1.endpointNotFound) {
+    return {
+      matterId: null,
+      matterIdStr: null,
+      created: false,
+      error: "Matter (Prospect) creation failed on /v1/prospects",
+      attempts,
+      warnings,
+    };
+  }
+
+  // 2) Fallback endpoint: /v1/matters (older accounts / legacy)
+  // Use the SAME field mapping as the docs payload (case_title/notes/etc.) but allow wrapper/type to be "matter".
+  const matterShapes = buildPayloadShapes(base, "matter", "matter");
+  const r2 = await tryCreateWithShapes(
+    accessToken,
+    "/v1/matters",
+    matterShapes,
+    attempts,
+    warnings,
+    false
+  );
+
+  if (r2.ok) {
+    const idNum = pickNumber(r2.idStr);
+    return { matterId: idNum, matterIdStr: r2.idStr, created: true, attempts, warnings };
+  }
+
+  return {
+    matterId: null,
+    matterIdStr: null,
+    created: false,
+    error: "Matter (Prospect) creation failed on both /v1/prospects (404) and /v1/matters",
+    attempts,
+    warnings,
   };
 }
 
