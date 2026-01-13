@@ -98,31 +98,35 @@ function toLocalDateTimeParts(
 }
 
 function normalizeIsoForTimezone(isoDatetime: string, timezone: string): string {
-  if (/[zZ]|[+-]\\d{2}:\\d{2}$/.test(isoDatetime)) {
-    return isoDatetime;
+  // Parse the ISO datetime (handles Z, offsets, or naive formats)
+  const date = new Date(isoDatetime);
+
+  if (isNaN(date.getTime())) {
+    return isoDatetime; // Return as-is if invalid
   }
 
-  const [datePart, timePartRaw] = isoDatetime.split("T");
-  if (!datePart || !timePartRaw) {
-    return isoDatetime;
-  }
+  // Format the date in the target timezone
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
 
-  const [year, month, day] = datePart.split("-").map(Number);
-  const [timePart] = timePartRaw.split(".");
-  const [hourStr, minuteStr, secondStr = "00"] = timePart.split(":");
+  const parts = formatter.formatToParts(date);
+  const partsObj: Record<string, string> = {};
+  parts.forEach(p => {
+    if (p.type !== 'literal') {
+      partsObj[p.type] = p.value;
+    }
+  });
 
-  const utcDate = new Date(Date.UTC(
-    year,
-    (month || 1) - 1,
-    day || 1,
-    Number(hourStr || "0"),
-    Number(minuteStr || "0"),
-    Number(secondStr || "0")
-  ));
-
-  const tzDate = new Date(utcDate.toLocaleString("en-US", { timeZone: timezone }));
-  const offsetMs = utcDate.getTime() - tzDate.getTime();
-  return new Date(utcDate.getTime() - offsetMs).toISOString();
+  // Construct ISO format string in target timezone (without offset)
+  return `${partsObj.year}-${partsObj.month}-${partsObj.day}T${partsObj.hour}:${partsObj.minute}:${partsObj.second}`;
 }
 
 // Helper to write progress log (non-blocking)
