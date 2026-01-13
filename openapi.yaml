@@ -1,0 +1,1166 @@
+openapi: 3.0.3
+info:
+  title: Firm Schedule Assistant API
+  version: 0.1.0
+  description: |
+    Backend contract for Supabase Edge functions. Lovable reads this file; Codex updates it.
+    Schema detail is best-effort and should be refined as endpoints evolve.
+servers:
+  - url: /functions/v1
+    description: Supabase Edge Functions
+
+tags:
+  - name: Booking
+  - name: Google
+  - name: Lawmatics
+  - name: Public
+
+paths:
+  /health:
+    get:
+      tags: [Public]
+      summary: Health check
+      description: Lightweight liveness endpoint. See `supabase/functions/health/index.ts`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /check-availability:
+    post:
+      tags: [Booking]
+      summary: Check internal availability across calendars
+      description: No auth check in code. See `supabase/functions/check-availability/index.ts`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityRequest"
+      responses:
+        "200":
+          description: Availability results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /confirm-booking:
+    post:
+      tags: [Public, Booking]
+      summary: Confirm a booking request
+      description: Public token-based booking confirmation. See `supabase/functions/confirm-booking/index.ts`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmBookingRequest"
+      responses:
+        "200":
+          description: Confirmation response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmBookingResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /confirm-test-booking:
+    post:
+      tags: [Booking]
+      summary: Confirm a test booking flow
+      description: Test-only confirmation path. Admin auth required. See `supabase/functions/confirm-test-booking/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmTestBookingRequest"
+      responses:
+        "200":
+          description: Confirmation response (200 even on some errors)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmTestBookingResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+
+  /create-test-booking-request:
+    post:
+      tags: [Booking]
+      summary: Create a test booking request
+      description: Admin auth required. See `supabase/functions/create-test-booking-request/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTestBookingRequest"
+      responses:
+        "200":
+          description: Test booking response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateTestBookingResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /public-available-slots:
+    post:
+      tags: [Public, Booking]
+      summary: List public available slots by token
+      description: Public endpoint for booking links. See `supabase/functions/public-available-slots/index.ts`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublicAvailableSlotsRequest"
+      responses:
+        "200":
+          description: Available time slots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicAvailableSlotsResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /public-booking-info:
+    post:
+      tags: [Public, Booking]
+      summary: Fetch public booking info by token
+      description: Public endpoint for booking link status. See `supabase/functions/public-booking-info/index.ts`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublicBookingInfoRequest"
+      responses:
+        "200":
+          description: Booking info response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicBookingInfoResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /test-booking-available-slots:
+    post:
+      tags: [Booking]
+      summary: List available slots for test bookings
+      description: Admin auth required. See `supabase/functions/test-booking-available-slots/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestBookingAvailableSlotsRequest"
+      responses:
+        "200":
+          description: Available time slots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestBookingAvailableSlotsResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-oauth-start:
+    post:
+      tags: [Google]
+      summary: Start Google OAuth flow
+      description: Returns an OAuth authorization URL. Requires Authorization header. See `supabase/functions/google-oauth-start/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: OAuth URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUrlResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-oauth-callback:
+    get:
+      tags: [Google]
+      summary: Google OAuth callback
+      description: Handles OAuth redirect and returns a 302. See `supabase/functions/google-oauth-callback/index.ts`.
+      parameters:
+        - in: query
+          name: code
+          schema: { type: string }
+        - in: query
+          name: state
+          schema: { type: string }
+        - in: query
+          name: error
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to app settings
+
+  /google-connection-status:
+    post:
+      tags: [Google]
+      summary: Get Google calendar connection status
+      description: Requires Authorization header. Admin needed to query another user. See `supabase/functions/google-connection-status/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleConnectionStatusRequest"
+      responses:
+        "200":
+          description: Connection status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleConnectionStatusResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-disconnect:
+    post:
+      tags: [Google]
+      summary: Disconnect Google calendar integration
+      description: Requires Authorization header. Admin needed to target another user. See `supabase/functions/google-disconnect/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleDisconnectRequest"
+      responses:
+        "200":
+          description: Disconnect response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleDisconnectResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-list-calendars:
+    post:
+      tags: [Google]
+      summary: List Google calendars
+      description: Requires Authorization header. See `supabase/functions/google-list-calendars/index.ts`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Calendar list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleListCalendarsResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-list-events:
+    post:
+      tags: [Google]
+      summary: List Google calendar events
+      description: Requires Authorization header. See `supabase/functions/google-list-events/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleListEventsRequest"
+      responses:
+        "200":
+          description: Event list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleListEventsResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-availability-day:
+    post:
+      tags: [Google]
+      summary: Google availability by day
+      description: Requires Authorization header. Admin needed to query another user. See `supabase/functions/google-availability-day/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleAvailabilityDayRequest"
+      responses:
+        "200":
+          description: Availability response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleAvailabilityDayResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-availability-month:
+    post:
+      tags: [Google]
+      summary: Google availability by month
+      description: Requires Authorization header. See `supabase/functions/google-availability-month/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleAvailabilityMonthRequest"
+      responses:
+        "200":
+          description: Availability response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleAvailabilityMonthResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /google-busy-debug:
+    post:
+      tags: [Google]
+      summary: Google busy intervals debug
+      description: Admin-only. Requires Authorization header. See `supabase/functions/google-busy-debug/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleBusyDebugRequest"
+      responses:
+        "200":
+          description: Busy interval data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleBusyDebugResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /refresh-google-token:
+    post:
+      tags: [Google]
+      summary: Refresh Google token
+      description: No auth check in code; intended for server-side or scheduled use. See `supabase/functions/refresh-google-token/index.ts`.
+      responses:
+        "200":
+          description: Refresh response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshGoogleTokenResponse"
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /lawmatics-oauth-start:
+    post:
+      tags: [Lawmatics]
+      summary: Start Lawmatics OAuth flow
+      description: Admin-only. Requires Authorization header. See `supabase/functions/lawmatics-oauth-start/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LawmaticsOAuthStartRequest"
+      responses:
+        "200":
+          description: OAuth URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LawmaticsOAuthStartResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /lawmatics-oauth-callback:
+    get:
+      tags: [Lawmatics]
+      summary: Lawmatics OAuth callback
+      description: Handles OAuth redirect and returns a 302. See `supabase/functions/lawmatics-oauth-callback/index.ts`.
+      parameters:
+        - in: query
+          name: code
+          schema: { type: string }
+        - in: query
+          name: state
+          schema: { type: string }
+        - in: query
+          name: error
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to app settings
+
+  /lawmatics-disconnect:
+    post:
+      tags: [Lawmatics]
+      summary: Disconnect Lawmatics integration
+      description: Admin-only. Requires Authorization header. See `supabase/functions/lawmatics-disconnect/index.ts`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Disconnect response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LawmaticsDisconnectResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /lawmatics-list-users:
+    post:
+      tags: [Lawmatics]
+      summary: List Lawmatics users
+      description: Requires Authorization header. See `supabase/functions/lawmatics-list-users/index.ts`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LawmaticsListUsersResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /lawmatics-list-locations:
+    post:
+      tags: [Lawmatics]
+      summary: List Lawmatics locations
+      description: Admin-only. Requires Authorization header. See `supabase/functions/lawmatics-list-locations/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LawmaticsReferenceRequest"
+      responses:
+        "200":
+          description: Location list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LawmaticsReferenceResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /lawmatics-list-event-types:
+    post:
+      tags: [Lawmatics]
+      summary: List Lawmatics event types
+      description: Requires Authorization header. See `supabase/functions/lawmatics-list-event-types/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LawmaticsReferenceRequest"
+      responses:
+        "200":
+          description: Event type list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LawmaticsReferenceResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /lawmatics-find-matters-by-email:
+    post:
+      tags: [Lawmatics]
+      summary: Find Lawmatics matters by email
+      description: No auth check in code. See `supabase/functions/lawmatics-find-matters-by-email/index.ts`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LawmaticsFindMattersRequest"
+      responses:
+        "200":
+          description: Matter search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LawmaticsFindMattersResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
+  /lawmatics-test:
+    post:
+      tags: [Lawmatics]
+      summary: Lawmatics test endpoint
+      description: Admin-only. Requires Authorization header. See `supabase/functions/lawmatics-test/index.ts`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Test response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LawmaticsTestResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  responses:
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    HealthResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        api_version: { type: string }
+        server_time: { type: string, format: date-time }
+      required: [ok, api_version, server_time]
+
+    AvailabilityRequest:
+      type: object
+      properties:
+        participantUserIds:
+          type: array
+          items: { type: string }
+        roomResourceEmail:
+          type: string
+        startDate:
+          type: string
+          format: date-time
+        endDate:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+        preferences:
+          type: object
+          properties:
+            businessHoursStart: { type: string }
+            businessHoursEnd: { type: string }
+            lunchStart: { type: string }
+            lunchEnd: { type: string }
+            minimumNoticeMinutes: { type: integer }
+            timezone: { type: string }
+          additionalProperties: true
+      required: [participantUserIds, startDate, endDate, durationMinutes]
+
+    AvailabilityResponse:
+      type: object
+      properties:
+        slots:
+          type: array
+          items: { $ref: "#/components/schemas/TimeSlot" }
+        busyIntervals:
+          type: array
+          items: { $ref: "#/components/schemas/BusyInterval" }
+        participantsChecked:
+          type: integer
+      additionalProperties: true
+
+    BusyInterval:
+      type: object
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+      required: [start, end]
+
+    TimeSlot:
+      type: object
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        label: { type: string }
+      required: [start, end]
+
+    ConfirmBookingRequest:
+      type: object
+      properties:
+        token: { type: string }
+        startDatetime: { type: string, format: date-time }
+        endDatetime: { type: string, format: date-time }
+      required: [token, startDatetime, endDatetime]
+
+    ConfirmBookingResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        meetingId: { type: string }
+        warnings:
+          type: array
+          items: { type: string }
+        error: { type: string }
+        phase1_completed: { type: boolean }
+        phase2_completed: { type: boolean }
+        lawmatics_debug:
+          type: object
+          additionalProperties: true
+        lawmatics:
+          type: object
+          properties:
+            appointment_id: { type: string, nullable: true }
+            contact_id: { type: string, nullable: true }
+            matter_id: { type: string, nullable: true }
+          additionalProperties: true
+        google:
+          type: object
+          properties:
+            results:
+              type: array
+              items: { $ref: "#/components/schemas/GoogleEventResult" }
+            summary:
+              type: object
+              properties:
+                total: { type: integer }
+                created: { type: integer }
+                skipped: { type: integer }
+                failed: { type: integer }
+              additionalProperties: true
+          additionalProperties: true
+      additionalProperties: true
+
+    GoogleEventResult:
+      type: object
+      properties:
+        user_id: { type: string }
+        user_email: { type: string }
+        calendar_id: { type: string }
+        event_id: { type: string }
+        created: { type: boolean }
+        skipped: { type: boolean }
+        reason: { type: string }
+        error: { type: string }
+      additionalProperties: true
+
+    ConfirmTestBookingRequest:
+      type: object
+      properties:
+        meetingId: { type: string }
+        startDatetime: { type: string, format: date-time }
+        endDatetime: { type: string, format: date-time }
+        runId: { type: string }
+      required: [meetingId, startDatetime, endDatetime, runId]
+
+    IntegrationError:
+      type: object
+      properties:
+        system: { type: string }
+        status: { type: integer }
+        message: { type: string }
+        responseExcerpt: { type: string }
+      required: [system, message]
+
+    ConfirmTestBookingResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        success: { type: boolean }
+        hasErrors: { type: boolean }
+        meetingId: { type: string }
+        googleEventId: { type: string }
+        lawmatics:
+          type: object
+          properties:
+            ok: { type: boolean }
+            createdId: { type: string }
+            missingFields:
+              type: array
+              items: { type: string }
+            ownerUserIdUsed: { type: integer }
+            usedTimeFormat: { type: string }
+            persisted: { type: boolean }
+            payloadComputed:
+              type: object
+              additionalProperties: true
+            readback:
+              type: object
+              additionalProperties: true
+          additionalProperties: true
+        lawmaticsAppointmentId: { type: string }
+        lawmaticsIsValid: { type: boolean }
+        lawmaticsReadback:
+          type: object
+          additionalProperties: true
+        lawmaticsDebug:
+          type: object
+          additionalProperties: true
+        error:
+          type: object
+          properties:
+            message: { type: string }
+          additionalProperties: true
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/IntegrationError" }
+      additionalProperties: true
+
+    CreateTestBookingRequest:
+      type: object
+      properties:
+        meetingTypeId: { type: string }
+        durationMinutes: { type: integer }
+        locationMode: { type: string, enum: [Zoom, InPerson] }
+        roomId: { type: string }
+        adminCalendarId: { type: string }
+        sendInvites: { type: boolean }
+      required: [meetingTypeId, durationMinutes, locationMode, adminCalendarId]
+
+    CreateTestBookingResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        meetingId: { type: string }
+        bookingRequestId: { type: string }
+        publicToken: { type: string }
+      required: [success]
+      additionalProperties: true
+
+    PublicAvailableSlotsRequest:
+      type: object
+      properties:
+        token: { type: string }
+        dateCursor: { type: string, format: date }
+        clientTimezone: { type: string }
+      required: [token]
+
+    PublicAvailableSlotsResponse:
+      type: object
+      properties:
+        slots:
+          type: array
+          items: { $ref: "#/components/schemas/TimeSlot" }
+      additionalProperties: true
+
+    PublicBookingInfoRequest:
+      type: object
+      properties:
+        token: { type: string }
+      required: [token]
+
+    PublicBookingInfoResponse:
+      type: object
+      properties:
+        state: { type: string }
+        meeting:
+          type: object
+          additionalProperties: true
+        contact:
+          type: object
+          additionalProperties: true
+        error: { type: string }
+      required: [state]
+
+    TestBookingAvailableSlotsRequest:
+      type: object
+      properties:
+        meetingId: { type: string }
+        dateCursor: { type: string, format: date }
+      required: [meetingId]
+
+    TestBookingAvailableSlotsResponse:
+      type: object
+      properties:
+        slots:
+          type: array
+          items: { $ref: "#/components/schemas/TimeSlot" }
+        error: { type: string }
+      additionalProperties: true
+
+    AuthUrlResponse:
+      type: object
+      properties:
+        authUrl: { type: string }
+      required: [authUrl]
+
+    GoogleConnectionStatusRequest:
+      type: object
+      properties:
+        internalUserId: { type: string }
+      additionalProperties: false
+
+    GoogleConnectionStatusResponse:
+      type: object
+      properties:
+        connected: { type: boolean }
+        verified_ok: { type: boolean, nullable: true }
+        verified_at: { type: string, format: date-time, nullable: true }
+        error: { type: string, nullable: true }
+      additionalProperties: true
+
+    GoogleDisconnectRequest:
+      type: object
+      properties:
+        internalUserId: { type: string }
+      additionalProperties: false
+
+    GoogleDisconnectResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        disconnected: { type: boolean }
+        revoked: { type: boolean }
+        revoke_error: { type: string, nullable: true }
+        error: { type: string }
+      additionalProperties: true
+
+    GoogleListCalendarsResponse:
+      type: object
+      properties:
+        calendars:
+          type: array
+          items: { $ref: "#/components/schemas/CalendarInfo" }
+        selectedCalendarIds:
+          type: array
+          items: { type: string }
+        error: { type: string, nullable: true }
+      additionalProperties: true
+
+    CalendarInfo:
+      type: object
+      properties:
+        id: { type: string }
+        summary: { type: string }
+        primary: { type: boolean }
+        accessRole: { type: string }
+        timeZone: { type: string }
+        selected: { type: boolean }
+      additionalProperties: true
+
+    GoogleListEventsRequest:
+      type: object
+      properties:
+        calendarId: { type: string }
+        maxResults: { type: integer }
+        timeMin: { type: string, format: date-time }
+        timeMax: { type: string, format: date-time }
+      additionalProperties: true
+
+    GoogleListEventsResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/CalendarEvent" }
+        error: { type: string, nullable: true }
+      additionalProperties: true
+
+    CalendarEvent:
+      type: object
+      properties:
+        id: { type: string }
+        summary: { type: string }
+        start:
+          type: object
+          additionalProperties: true
+        end:
+          type: object
+          additionalProperties: true
+        location: { type: string, nullable: true }
+        htmlLink: { type: string }
+        status: { type: string }
+      additionalProperties: true
+
+    GoogleAvailabilityDayRequest:
+      type: object
+      properties:
+        internalUserId: { type: string }
+        date: { type: string, format: date }
+        durationMinutes: { type: integer }
+        businessStart: { type: string }
+        businessEnd: { type: string }
+        debug: { type: boolean }
+      required: [date]
+      additionalProperties: true
+
+    GoogleAvailabilityDayResponse:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        slots:
+          type: array
+          items: { $ref: "#/components/schemas/TimeSlot" }
+        error: { type: string, nullable: true }
+        calendarsChecked:
+          type: array
+          items: { type: string }
+        busySource: { type: string }
+        busyIntervalsCount: { type: integer }
+        eventsCount: { type: integer }
+        debug:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    GoogleAvailabilityMonthRequest:
+      type: object
+      properties:
+        month: { type: integer }
+        year: { type: integer }
+        durationMinutes: { type: integer }
+        businessStart: { type: string }
+        businessEnd: { type: string }
+        timezone: { type: string }
+        calendarIds:
+          type: array
+          items: { type: string }
+      additionalProperties: true
+
+    GoogleAvailabilityMonthResponse:
+      type: object
+      properties:
+        days:
+          type: array
+          items: { $ref: "#/components/schemas/DaySummary" }
+        error: { type: string, nullable: true }
+        calendarsChecked:
+          type: array
+          items: { type: string }
+      additionalProperties: true
+
+    DaySummary:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        slotCount: { type: integer }
+        firstSlotStart: { type: string, format: date-time }
+        lastSlotStart: { type: string, format: date-time }
+      additionalProperties: true
+
+    GoogleBusyDebugRequest:
+      type: object
+      properties:
+        internalUserId: { type: string }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+      required: [internalUserId, start, end]
+
+    GoogleBusyDebugResponse:
+      type: object
+      properties:
+        calendarsChecked:
+          type: array
+          items: { type: string }
+        busyIntervals:
+          type: array
+          items: { $ref: "#/components/schemas/BusyIntervalWithCalendar" }
+        error: { type: string }
+      additionalProperties: true
+
+    BusyIntervalWithCalendar:
+      type: object
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        calendarId: { type: string }
+      required: [start, end, calendarId]
+
+    RefreshGoogleTokenResponse:
+      type: object
+      properties:
+        message: { type: string }
+        refreshed: { type: integer }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/RefreshResult" }
+      additionalProperties: true
+
+    RefreshResult:
+      type: object
+      properties:
+        connectionId: { type: string }
+        success: { type: boolean }
+        error: { type: string }
+      required: [connectionId, success]
+      additionalProperties: true
+
+    LawmaticsOAuthStartRequest:
+      type: object
+      properties:
+        appUrl: { type: string }
+      additionalProperties: false
+
+    LawmaticsOAuthStartResponse:
+      type: object
+      properties:
+        url: { type: string }
+      required: [url]
+
+    LawmaticsDisconnectResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        disconnected: { type: boolean }
+        message: { type: string }
+        error: { type: string }
+      additionalProperties: true
+
+    LawmaticsListUsersResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/LawmaticsUser" }
+        count: { type: integer }
+        error: { type: string }
+        reconnectRequired: { type: boolean }
+      additionalProperties: true
+
+    LawmaticsUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, nullable: true }
+        name: { type: string, nullable: true }
+        firstName: { type: string, nullable: true }
+        lastName: { type: string, nullable: true }
+        timezone: { type: string, nullable: true }
+      additionalProperties: true
+
+    LawmaticsReferenceRequest:
+      type: object
+      properties:
+        forceRefresh: { type: boolean }
+        debug: { type: boolean }
+      additionalProperties: false
+
+    LawmaticsReferenceResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LawmaticsReferenceItem" }
+        fetched_at: { type: string, format: date-time, nullable: true }
+        cached: { type: boolean }
+        warning: { type: string }
+        reconnectRequired: { type: boolean }
+      additionalProperties: true
+
+    LawmaticsReferenceItem:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        address: { type: string }
+      additionalProperties: true
+
+    LawmaticsFindMattersRequest:
+      type: object
+      properties:
+        email: { type: string, format: email }
+      required: [email]
+
+    LawmaticsFindMattersResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        matters:
+          type: array
+          items: { $ref: "#/components/schemas/LawmaticsMatter" }
+        contactId: { type: string }
+        warnings:
+          type: array
+          items: { type: string }
+        error: { type: string }
+      additionalProperties: true
+
+    LawmaticsMatter:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        status: { type: string, nullable: true }
+        practice_area: { type: string, nullable: true }
+        updated_at: { type: string, nullable: true }
+      additionalProperties: true
+
+    LawmaticsTestResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        status: { type: integer }
+        message: { type: string }
+        error: { type: string }
+      additionalProperties: true
