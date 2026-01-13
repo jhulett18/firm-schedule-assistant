@@ -218,6 +218,24 @@ export type Database = {
           },
         ]
       }
+      companies: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
       lawmatics_connections: {
         Row: {
           access_token: string
@@ -322,6 +340,7 @@ export type Database = {
           m365_event_id: string | null
           meeting_type_id: string | null
           override_mode_used: boolean
+          participant_user_ids: string[]
           preferences: Json
           room_id: string | null
           search_window_days_used: number
@@ -353,6 +372,7 @@ export type Database = {
           m365_event_id?: string | null
           meeting_type_id?: string | null
           override_mode_used?: boolean
+          participant_user_ids?: string[]
           preferences?: Json
           room_id?: string | null
           search_window_days_used?: number
@@ -384,6 +404,7 @@ export type Database = {
           m365_event_id?: string | null
           meeting_type_id?: string | null
           override_mode_used?: boolean
+          participant_user_ids?: string[]
           preferences?: Json
           room_id?: string | null
           search_window_days_used?: number
@@ -652,6 +673,7 @@ export type Database = {
         Row: {
           active: boolean
           auth_user_id: string | null
+          company_id: string
           created_at: string
           default_search_window_days: number
           email: string
@@ -670,6 +692,7 @@ export type Database = {
         Insert: {
           active?: boolean
           auth_user_id?: string | null
+          company_id?: string
           created_at?: string
           default_search_window_days?: number
           email: string
@@ -688,6 +711,7 @@ export type Database = {
         Update: {
           active?: boolean
           auth_user_id?: string | null
+          company_id?: string
           created_at?: string
           default_search_window_days?: number
           email?: string
@@ -703,13 +727,22 @@ export type Database = {
           zoom_refresh_token?: string | null
           zoom_user_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "users_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      get_current_user_company_id: { Args: never; Returns: string }
       get_current_user_internal_id: { Args: never; Returns: string }
       has_admin_role: { Args: { _user_id: string }; Returns: boolean }
       has_role: {

@@ -334,7 +334,7 @@ serve(async (req) => {
       );
     }
 
-    // 2. Fetch meeting details
+    // 2. Fetch meeting details - now including participant_user_ids
     const { data: meeting, error: meetingError } = await supabase
       .from("meetings")
       .select(`
@@ -344,6 +344,7 @@ serve(async (req) => {
         room_id,
         location_mode,
         support_user_ids,
+        participant_user_ids,
         search_window_days_used
       `)
       .eq("id", bookingRequest.meeting_id)
@@ -368,28 +369,40 @@ serve(async (req) => {
       roomResourceEmail = room?.resource_email || null;
     }
 
-    // 4. Build list of participant user IDs
-    const participantUserIds: string[] = [];
-    if (meeting.host_attorney_user_id) {
-      participantUserIds.push(meeting.host_attorney_user_id);
-    }
-    if (meeting.support_user_ids && Array.isArray(meeting.support_user_ids)) {
-      participantUserIds.push(...meeting.support_user_ids);
+    // 4. Build list of ALL participant user IDs
+    // Priority: use participant_user_ids if populated, else fallback to legacy host + support_user_ids
+    let participantUserIds: string[] = [];
+    
+    if (meeting.participant_user_ids && Array.isArray(meeting.participant_user_ids) && meeting.participant_user_ids.length > 0) {
+      // Use new participant_user_ids field (includes host + additional participants)
+      participantUserIds = meeting.participant_user_ids;
+      console.log("Using participant_user_ids:", participantUserIds);
+    } else {
+      // Fallback to legacy fields for backward compatibility
+      if (meeting.host_attorney_user_id) {
+        participantUserIds.push(meeting.host_attorney_user_id);
+      }
+      if (meeting.support_user_ids && Array.isArray(meeting.support_user_ids)) {
+        participantUserIds.push(...meeting.support_user_ids);
+      }
+      console.log("Using legacy host + support_user_ids:", participantUserIds);
     }
 
-    // 5. Get calendar connections for participants
+    // 5. Get calendar connections for ALL participants
     const { data: connections } = await supabase
       .from("calendar_connections")
       .select("*")
       .eq("provider", "google")
       .in("user_id", participantUserIds);
 
+    console.log(`Found ${connections?.length || 0} calendar connections for ${participantUserIds.length} participants`);
+
     const allBusyIntervals: BusyInterval[] = [];
     const searchWindowDays = meeting.search_window_days_used || 14;
     const startDate = dateCursor ? new Date(dateCursor) : new Date();
     const endDate = new Date(startDate.getTime() + searchWindowDays * 24 * 60 * 60 * 1000);
 
-    // 6. Fetch busy intervals for each participant (with token refresh)
+    // 6. Fetch busy intervals for EACH participant (intersection availability)
     for (const connection of connections || []) {
       // Check if token is expired or expiring soon - if so, refresh instead of skipping
       const tokenExpiresAt = connection.token_expires_at ? new Date(connection.token_expires_at) : null;
@@ -418,7 +431,7 @@ serve(async (req) => {
           ? connection.selected_calendar_ids
           : ["primary"];
         
-        console.log(`Checking calendars for user ${connection.user_id}:`, calendarIds);
+        console.log(`Checking calendars for participant ${connection.user_id}:`, calendarIds);
 
         const { busy } = await getBusyIntervalsWithRetry(
           connection,
@@ -427,9 +440,12 @@ serve(async (req) => {
           endDate.toISOString(),
           supabase
         );
+        
+        // Add all busy intervals from this participant (intersection = all busy times matter)
         allBusyIntervals.push(...busy);
+        console.log(`Added ${busy.length} busy intervals from participant ${connection.user_id}`);
       } catch (err) {
-        console.error(`Failed to get busy for user ${connection.user_id}:`, err);
+        console.error(`Failed to get busy for participant ${connection.user_id}:`, err);
       }
     }
 
@@ -451,7 +467,9 @@ serve(async (req) => {
       }
     }
 
-    // 8. Generate available slots (returns safe data only)
+    console.log(`Total busy intervals across all participants: ${allBusyIntervals.length}`);
+
+    // 8. Generate available slots (intersection: free only when ALL are free)
     const slots = suggestSlots(
       allBusyIntervals,
       startDate,
@@ -460,7 +478,7 @@ serve(async (req) => {
       clientTimezone
     );
 
-    console.log(`Found ${slots.length} available slots`);
+    console.log(`Found ${slots.length} available slots that work for all participants`);
 
     // Never return internal data like busy intervals, calendar IDs, or attendee info
     return new Response(JSON.stringify({ slots }), {
