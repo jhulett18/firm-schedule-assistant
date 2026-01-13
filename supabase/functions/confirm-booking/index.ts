@@ -585,15 +585,31 @@ serve(async (req) => {
     // PHASE 2: Non-blocking integrations (best-effort)
     // ==========================================
     
-    // Initialize debug structures
+    // Initialize debug structures - enhanced for matter bisect debugging
     const lawmatics_debug: {
       contact: { attempted: boolean; endpoint: string; status: number; id?: string; body_excerpt?: string };
-      matter: { attempted: boolean; endpoint: string; status: number; id?: string; body_excerpt?: string };
+      matter: { 
+        attempted: boolean; 
+        endpoint: string; 
+        status: number; 
+        id?: string; 
+        body_excerpt?: string;
+        field_that_caused_error?: string;
+      };
+      matter_attempts: Array<{
+        endpoint: string;
+        method: string;
+        status: number;
+        body_excerpt: string;
+        payload_sent?: Record<string, any>;
+        fields_included?: string[];
+      }>;
       event: { attempted: boolean; endpoint: string; status: number; id?: string; body_excerpt?: string };
       timestamp?: string;
     } = {
       contact: { attempted: false, endpoint: "", status: 0 },
       matter: { attempted: false, endpoint: "", status: 0 },
+      matter_attempts: [],
       event: { attempted: false, endpoint: "", status: 0 },
       timestamp: new Date().toISOString(),
     };
@@ -806,6 +822,16 @@ serve(async (req) => {
                   notes: matterDescription,
                 });
 
+                // Store all attempts for debugging
+                lawmatics_debug.matter_attempts = (matterResult.attempts || []).map(a => ({
+                  endpoint: a.endpoint,
+                  method: a.method,
+                  status: a.status,
+                  body_excerpt: a.body_excerpt,
+                  payload_sent: a.payload_sent,
+                  fields_included: a.fields_included,
+                }));
+
                 const lastMatterAttempt = (matterResult.attempts || [])[(matterResult.attempts || []).length - 1];
                 lawmatics_debug.matter = {
                   attempted: true,
@@ -813,6 +839,7 @@ serve(async (req) => {
                   status: lastMatterAttempt?.status ?? 0,
                   id: matterResult.matterIdStr || undefined,
                   body_excerpt: lastMatterAttempt?.body_excerpt || (matterResult.warnings?.join("; ") || undefined),
+                  field_that_caused_error: matterResult.fieldThatCausedError,
                 };
 
                 if (matterResult.matterIdStr) {
