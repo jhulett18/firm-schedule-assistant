@@ -48,7 +48,7 @@ export async function lawmaticsJson(res: Response): Promise<LawmaticsJsonResult>
     status: res.status,
     text,
     json,
-    excerpt: (text || "").slice(0, 300),
+    excerpt: (text || "").slice(0, 500),
   };
 }
 
@@ -74,6 +74,65 @@ export function normalizeDateOnly(s: any): string | null {
   if (!v) return null;
   // If Lawmatics returns an ISO-ish timestamp for start_date, normalize to YYYY-MM-DD
   return v.includes("T") ? v.slice(0, 10) : v;
+}
+
+// ========== ENDPOINT DETECTION ==========
+
+export interface EndpointDetectionResult {
+  prospectsEndpointExists: boolean;
+  mattersEndpointExists: boolean;
+  preferredEndpoint: "/v1/prospects" | "/v1/matters" | null;
+  prospectsCheck: { status: number; excerpt: string };
+  mattersCheck: { status: number; excerpt: string };
+}
+
+/**
+ * Detect which Matter/Prospect endpoints exist in this Lawmatics account.
+ * This is done by making a lightweight GET request to each endpoint.
+ */
+export async function detectAvailableEndpoints(accessToken: string): Promise<EndpointDetectionResult> {
+  const result: EndpointDetectionResult = {
+    prospectsEndpointExists: false,
+    mattersEndpointExists: false,
+    preferredEndpoint: null,
+    prospectsCheck: { status: 0, excerpt: "" },
+    mattersCheck: { status: 0, excerpt: "" },
+  };
+
+  // Check /v1/prospects
+  try {
+    const prospectsRes = await lawmaticsFetch(accessToken, "GET", "/v1/prospects?per_page=1");
+    const prospectsJson = await lawmaticsJson(prospectsRes);
+    result.prospectsCheck = { status: prospectsJson.status, excerpt: prospectsJson.excerpt };
+    result.prospectsEndpointExists = prospectsJson.ok || prospectsJson.status !== 404;
+    console.log(`[Lawmatics] /v1/prospects check: ${prospectsJson.status} ok=${prospectsJson.ok}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    result.prospectsCheck = { status: 0, excerpt: msg };
+    console.log("[Lawmatics] /v1/prospects check exception:", msg);
+  }
+
+  // Check /v1/matters
+  try {
+    const mattersRes = await lawmaticsFetch(accessToken, "GET", "/v1/matters?per_page=1");
+    const mattersJson = await lawmaticsJson(mattersRes);
+    result.mattersCheck = { status: mattersJson.status, excerpt: mattersJson.excerpt };
+    result.mattersEndpointExists = mattersJson.ok || mattersJson.status !== 404;
+    console.log(`[Lawmatics] /v1/matters check: ${mattersJson.status} ok=${mattersJson.ok}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    result.mattersCheck = { status: 0, excerpt: msg };
+    console.log("[Lawmatics] /v1/matters check exception:", msg);
+  }
+
+  // Prefer /v1/prospects (the documented endpoint for PNC/Matters)
+  if (result.prospectsEndpointExists) {
+    result.preferredEndpoint = "/v1/prospects";
+  } else if (result.mattersEndpointExists) {
+    result.preferredEndpoint = "/v1/matters";
+  }
+
+  return result;
 }
 
 // ========== LAWMATICS USER OPERATIONS ==========
@@ -233,7 +292,7 @@ export async function lawmaticsGetMe(accessToken: string): Promise<{
   }
 }
 
-// ========== LAWMATICS CONTACT/MATTER OPERATIONS ==========
+// ========== LAWMATICS CONTACT OPERATIONS ==========
 
 export interface Attendee {
   email?: string | null;
@@ -326,312 +385,342 @@ export async function lawmaticsFindOrCreateContact(
   }
 }
 
-export interface LawmaticsMatterAttempt {
-  endpoint: string;
-  payload_shape: "flat" | "wrapped" | "jsonapi";
-  status: number;
-  excerpt: string;
-}
+// ========== LAWMATICS MATTER (PROSPECT) OPERATIONS ==========
 
-export interface LawmaticsMatterResult {
-  matterId: number | null;
-  matterIdStr: string | null;
-  created: boolean;
-  error?: string;
-  warnings?: string[];
-  attempts?: LawmaticsMatterAttempt[];
+export interface MatterAttempt {
+  endpoint: string;
+  method: string;
+  status: number;
+  body_excerpt: string;
 }
 
 export interface MatterCreateParams {
   contactId?: number | string | null;
-  email?: string | null;
-  firstName?: string | null;
-  lastName?: string | null;
+  email: string;
+  firstName: string;
+  lastName: string;
   caseTitle: string;
   notes?: string | null;
+  phone?: string | null;
 }
 
-type ProspectBasePayload = {
-  first_name: string;
-  last_name: string;
-  email: string;
-  case_title: string;
-  notes?: string;
-  match_contact_by?: "email";
-  contact_id?: number | string;
-};
-
-function normalizeProspectBasePayload(params: MatterCreateParams): ProspectBasePayload {
-  const email = pickString(params.email) || "";
-  const first_name = pickString(params.firstName) || "Client";
-  const last_name = pickString(params.lastName) || "Booking";
-
-  const base: ProspectBasePayload = {
-    first_name,
-    last_name,
-    email,
-    case_title: params.caseTitle,
-  };
-
-  const notes = pickString(params.notes);
-  if (notes) base.notes = notes;
-
-  // Prefer match_contact_by=email to dedupe/link by email (as documented)
-  if (email) base.match_contact_by = "email";
-
-  // Also include contact_id if we have it (acts as a fallback / explicit link)
-  const contactIdNum = pickNumber(params.contactId);
-  if (contactIdNum) base.contact_id = contactIdNum;
-  else if (pickString(params.contactId)) base.contact_id = String(params.contactId);
-
-  return base;
-}
-
-function buildPayloadShapes<T extends Record<string, any>>(
-  base: T,
-  resourceType: "prospect" | "matter",
-  wrappedKey: "prospect" | "matter"
-): Array<{ shape: LawmaticsMatterAttempt["payload_shape"]; payload: any }> {
-  return [
-    { shape: "flat", payload: base },
-    { shape: "wrapped", payload: { [wrappedKey]: base } },
-    { shape: "jsonapi", payload: { data: { type: resourceType, attributes: base } } },
-  ];
-}
-
-async function tryCreateWithShapes(
-  accessToken: string,
-  endpoint: string,
-  shapes: Array<{ shape: LawmaticsMatterAttempt["payload_shape"]; payload: any }>,
-  attempts: LawmaticsMatterAttempt[],
-  warnings: string[],
-  stopOn404: boolean
-): Promise<{ ok: boolean; status: number; idStr: string | null; endpointNotFound: boolean }>
-{
-  for (const { shape, payload } of shapes) {
-    try {
-      console.log(`[Lawmatics] POST ${endpoint} (${shape}) payload:`, JSON.stringify(payload));
-      const res = await lawmaticsFetch(accessToken, "POST", endpoint, payload);
-      const result = await lawmaticsJson(res);
-
-      attempts.push({
-        endpoint,
-        payload_shape: shape,
-        status: result.status,
-        excerpt: result.excerpt,
-      });
-
-      if (result.ok) {
-        const idStr = pickString(result.json?.data?.id ?? result.json?.id);
-        return { ok: true, status: result.status, idStr, endpointNotFound: false };
-      }
-
-      // Always record detailed failure for debugging
-      warnings.push(
-        `[Lawmatics] Matter create failed at ${endpoint} (${shape}) status=${result.status} body=${result.excerpt}`
-      );
-
-      if (result.status === 404 && stopOn404) {
-        return { ok: false, status: 404, idStr: null, endpointNotFound: true };
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      attempts.push({ endpoint, payload_shape: shape, status: 0, excerpt: msg });
-      warnings.push(`[Lawmatics] Matter create exception at ${endpoint} (${shape}): ${msg}`);
-    }
-  }
-
-  return { ok: false, status: attempts.length ? attempts[attempts.length - 1].status : 0, idStr: null, endpointNotFound: false };
+export interface MatterCreateResult {
+  matterId: number | null;
+  matterIdStr: string | null;
+  created: boolean;
+  verified: boolean;
+  endpointUsed: string | null;
+  attempts: MatterAttempt[];
+  warnings: string[];
 }
 
 /**
- * Create a NEW Lawmatics Matter (Prospect) per the official "Matters (Prospects)" docs.
- *
+ * Create a NEW Lawmatics Matter (Prospect) using the Matter-first strategy.
+ * 
  * Strategy:
- * - Primary endpoint: POST /v1/prospects
- * - If and only if we get a 404 (endpoint not present for this account), fallback: POST /v1/matters
- * - For each endpoint, try payload shapes in this exact order:
- *   1) flat
- *   2) wrapped
- *   3) JSON:API
- *
- * Non-blocking by design: returns attempts + warnings so callers can surface exact failure reasons.
+ * 1. Detect which endpoints exist via preflight GET requests
+ * 2. Use the preferred endpoint (/v1/prospects first, /v1/matters as fallback)
+ * 3. Send a FLAT payload (per Lawmatics docs for Contacts/Prospects)
+ * 4. Verify the created matter by GET request
+ * 
+ * Non-blocking: returns attempts + warnings so callers can surface exact failure reasons.
  */
 export async function lawmaticsCreateMatter(
   accessToken: string,
   params: MatterCreateParams
-): Promise<LawmaticsMatterResult> {
-  const base = normalizeProspectBasePayload(params);
-
-  // Required fields guard (per docs: must include identity + case_title)
-  if (!base.email || !base.case_title || !base.first_name || !base.last_name) {
-    return {
-      matterId: null,
-      matterIdStr: null,
-      created: false,
-      error: "Missing required fields for Matter (Prospect) creation",
-      warnings: [
-        `required=email,first_name,last_name,case_title; got email=${Boolean(base.email)} first_name=${Boolean(base.first_name)} last_name=${Boolean(base.last_name)} case_title=${Boolean(base.case_title)}`,
-      ],
-      attempts: [],
-    };
-  }
-
-  const attempts: LawmaticsMatterAttempt[] = [];
+): Promise<MatterCreateResult> {
+  const attempts: MatterAttempt[] = [];
   const warnings: string[] = [];
 
-  // 1) Try the docs endpoint for Matters (Prospects)
-  const prospectShapes = buildPayloadShapes(base, "prospect", "prospect");
-  const r1 = await tryCreateWithShapes(
-    accessToken,
-    "/v1/prospects",
-    prospectShapes,
-    attempts,
-    warnings,
-    true // stopOn404: if endpoint missing, don't keep trying other shapes
-  );
-
-  if (r1.ok) {
-    const idNum = pickNumber(r1.idStr);
-    return { matterId: idNum, matterIdStr: r1.idStr, created: true, attempts, warnings };
-  }
-
-  // Only fallback to /v1/matters when /v1/prospects is not found.
-  if (!r1.endpointNotFound) {
+  // Validate required fields
+  if (!params.email || !params.firstName || !params.lastName || !params.caseTitle) {
     return {
       matterId: null,
       matterIdStr: null,
       created: false,
-      error: "Matter (Prospect) creation failed on /v1/prospects",
-      attempts,
-      warnings,
+      verified: false,
+      endpointUsed: null,
+      attempts: [],
+      warnings: [
+        `Missing required fields: email=${Boolean(params.email)} firstName=${Boolean(params.firstName)} lastName=${Boolean(params.lastName)} caseTitle=${Boolean(params.caseTitle)}`,
+      ],
     };
   }
 
-  // 2) Fallback endpoint: /v1/matters (older accounts / legacy)
-  // Use the SAME field mapping as the docs payload (case_title/notes/etc.) but allow wrapper/type to be "matter".
-  const matterShapes = buildPayloadShapes(base, "matter", "matter");
-  const r2 = await tryCreateWithShapes(
-    accessToken,
-    "/v1/matters",
-    matterShapes,
-    attempts,
-    warnings,
-    false
-  );
+  // Step 1: Detect available endpoints
+  console.log("[Lawmatics] Detecting available endpoints...");
+  const detection = await detectAvailableEndpoints(accessToken);
+  console.log("[Lawmatics] Endpoint detection result:", JSON.stringify(detection));
 
-  if (r2.ok) {
-    const idNum = pickNumber(r2.idStr);
-    return { matterId: idNum, matterIdStr: r2.idStr, created: true, attempts, warnings };
+  if (!detection.preferredEndpoint) {
+    return {
+      matterId: null,
+      matterIdStr: null,
+      created: false,
+      verified: false,
+      endpointUsed: null,
+      attempts: [],
+      warnings: [
+        `Neither /v1/prospects nor /v1/matters endpoints are available. prospects=${detection.prospectsCheck.status} matters=${detection.mattersCheck.status}`,
+      ],
+    };
   }
 
+  // Step 2: Build the payload (flat structure per Lawmatics docs)
+  // The docs show that Create Contact uses flat: { first_name, last_name, email, ... }
+  // Create Prospect/Matter should follow the same pattern
+  const payload: Record<string, any> = {
+    first_name: params.firstName,
+    last_name: params.lastName,
+    email: params.email,
+    case_title: params.caseTitle,
+  };
+
+  // Add optional fields
+  if (params.notes) {
+    payload.notes = params.notes;
+  }
+  if (params.phone) {
+    payload.phone = params.phone;
+  }
+
+  // Include contact_id if we have it (per docs: added in 1.11.0)
+  const contactIdNum = pickNumber(params.contactId);
+  if (contactIdNum) {
+    payload.contact_id = contactIdNum;
+  }
+
+  // Include match_contact_by=email to auto-link/dedupe contacts (per docs: added in 1.11.0)
+  if (params.email) {
+    payload.match_contact_by = "email";
+  }
+
+  console.log(`[Lawmatics] Creating matter via ${detection.preferredEndpoint} with payload:`, JSON.stringify(payload));
+
+  // Step 3: Try to create on preferred endpoint
+  let matterId: string | null = null;
+  let endpointUsed: string | null = null;
+
+  try {
+    const res = await lawmaticsFetch(accessToken, "POST", detection.preferredEndpoint, payload);
+    const result = await lawmaticsJson(res);
+
+    attempts.push({
+      endpoint: detection.preferredEndpoint,
+      method: "POST",
+      status: result.status,
+      body_excerpt: result.excerpt,
+    });
+
+    console.log(`[Lawmatics] ${detection.preferredEndpoint} POST result: status=${result.status}`);
+
+    if (result.ok) {
+      matterId = pickString(result.json?.data?.id ?? result.json?.id);
+      endpointUsed = detection.preferredEndpoint;
+      console.log(`[Lawmatics] Matter created successfully: ${matterId}`);
+    } else {
+      warnings.push(
+        `POST ${detection.preferredEndpoint} failed: status=${result.status} body=${result.excerpt}`
+      );
+
+      // If preferred endpoint failed and we have a fallback, try it
+      const fallbackEndpoint = detection.preferredEndpoint === "/v1/prospects" 
+        ? (detection.mattersEndpointExists ? "/v1/matters" : null)
+        : (detection.prospectsEndpointExists ? "/v1/prospects" : null);
+
+      if (fallbackEndpoint) {
+        console.log(`[Lawmatics] Trying fallback endpoint: ${fallbackEndpoint}`);
+        
+        try {
+          const fallbackRes = await lawmaticsFetch(accessToken, "POST", fallbackEndpoint, payload);
+          const fallbackResult = await lawmaticsJson(fallbackRes);
+
+          attempts.push({
+            endpoint: fallbackEndpoint,
+            method: "POST",
+            status: fallbackResult.status,
+            body_excerpt: fallbackResult.excerpt,
+          });
+
+          if (fallbackResult.ok) {
+            matterId = pickString(fallbackResult.json?.data?.id ?? fallbackResult.json?.id);
+            endpointUsed = fallbackEndpoint;
+            console.log(`[Lawmatics] Matter created via fallback: ${matterId}`);
+          } else {
+            warnings.push(
+              `POST ${fallbackEndpoint} fallback failed: status=${fallbackResult.status} body=${fallbackResult.excerpt}`
+            );
+          }
+        } catch (fallbackErr) {
+          const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+          attempts.push({
+            endpoint: fallbackEndpoint,
+            method: "POST",
+            status: 0,
+            body_excerpt: fallbackMsg,
+          });
+          warnings.push(`POST ${fallbackEndpoint} fallback exception: ${fallbackMsg}`);
+        }
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    attempts.push({
+      endpoint: detection.preferredEndpoint,
+      method: "POST",
+      status: 0,
+      body_excerpt: msg,
+    });
+    warnings.push(`POST ${detection.preferredEndpoint} exception: ${msg}`);
+  }
+
+  // Step 4: Verify the created matter exists
+  let verified = false;
+  if (matterId && endpointUsed) {
+    console.log(`[Lawmatics] Verifying matter ${matterId} exists...`);
+    try {
+      const verifyRes = await lawmaticsFetch(accessToken, "GET", `${endpointUsed}/${matterId}`);
+      const verifyResult = await lawmaticsJson(verifyRes);
+
+      attempts.push({
+        endpoint: `${endpointUsed}/${matterId}`,
+        method: "GET",
+        status: verifyResult.status,
+        body_excerpt: verifyResult.excerpt.slice(0, 200),
+      });
+
+      if (verifyResult.ok) {
+        verified = true;
+        console.log(`[Lawmatics] Matter ${matterId} verified successfully`);
+      } else {
+        warnings.push(
+          `Verification failed: GET ${endpointUsed}/${matterId} status=${verifyResult.status}`
+        );
+      }
+    } catch (verifyErr) {
+      const verifyMsg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
+      warnings.push(`Verification exception: ${verifyMsg}`);
+    }
+  }
+
+  const matterIdNum = pickNumber(matterId);
+
   return {
-    matterId: null,
-    matterIdStr: null,
-    created: false,
-    error: "Matter (Prospect) creation failed on both /v1/prospects (404) and /v1/matters",
+    matterId: matterIdNum,
+    matterIdStr: matterId,
+    created: matterId !== null,
+    verified,
+    endpointUsed,
     attempts,
     warnings,
   };
 }
 
 /**
- * Find a matter by contact ID or email, or create a new one.
- * @deprecated Use lawmaticsCreateMatter instead for booking flows
- * Returns matter_id.
+ * Find matters/prospects for a given contact or by email search.
+ * Uses the same endpoint detection pattern.
  */
-export async function lawmaticsFindOrCreateMatter(
+export async function lawmaticsFindMattersByContact(
   accessToken: string,
   contactId: number | string | null,
-  attendee: Attendee,
-  matterName?: string
+  email?: string | null
 ): Promise<{
-  matterId: number | null;
-  matterIdStr: string | null;
-  created: boolean;
-  error?: string;
+  matters: Array<{ id: string; case_title: string | null; status: string | null; updated_at: string | null }>;
+  attempts: MatterAttempt[];
+  warnings: string[];
 }> {
-  const email = pickString(attendee?.email);
+  const matters: Array<{ id: string; case_title: string | null; status: string | null; updated_at: string | null }> = [];
+  const attempts: MatterAttempt[] = [];
+  const warnings: string[] = [];
 
-  // 1) If we have a contact ID, try to find their existing matter
-  if (contactId) {
-    try {
-      const res = await lawmaticsFetch(
-        accessToken,
-        "GET",
-        `/v1/matters?contact_id=${contactId}&per_page=5`
-      );
-      const { ok, json } = await lawmaticsJson(res);
+  // Detect available endpoints
+  const detection = await detectAvailableEndpoints(accessToken);
 
-      if (ok) {
-        const matters: any[] = Array.isArray(json?.data) ? json.data : [];
-        if (matters.length > 0) {
-          const first = matters[0];
-          const idStr = pickString(first?.id);
-          const idNum = pickNumber(idStr);
-          console.log("[Lawmatics] Found existing matter for contact:", idStr);
-          return { matterId: idNum, matterIdStr: idStr, created: false };
+  if (!detection.preferredEndpoint) {
+    warnings.push("No matter/prospect endpoints available");
+    return { matters, attempts, warnings };
+  }
+
+  const endpoints = [detection.preferredEndpoint];
+  if (detection.preferredEndpoint === "/v1/prospects" && detection.mattersEndpointExists) {
+    endpoints.push("/v1/matters");
+  } else if (detection.preferredEndpoint === "/v1/matters" && detection.prospectsEndpointExists) {
+    endpoints.push("/v1/prospects");
+  }
+
+  for (const endpoint of endpoints) {
+    // Try by contact_id first
+    if (contactId) {
+      try {
+        const url = `${endpoint}?contact_id=${contactId}&per_page=25`;
+        const res = await lawmaticsFetch(accessToken, "GET", url);
+        const result = await lawmaticsJson(res);
+
+        attempts.push({
+          endpoint: url,
+          method: "GET",
+          status: result.status,
+          body_excerpt: result.excerpt.slice(0, 200),
+        });
+
+        if (result.ok) {
+          const data: any[] = Array.isArray(result.json?.data) ? result.json.data : [];
+          for (const m of data) {
+            const attrs = m?.attributes ?? m;
+            matters.push({
+              id: pickString(m?.id) || "",
+              case_title: pickString(attrs?.case_title ?? attrs?.name),
+              status: pickString(attrs?.status),
+              updated_at: pickString(attrs?.updated_at),
+            });
+          }
+          if (matters.length > 0) {
+            return { matters, attempts, warnings };
+          }
         }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        warnings.push(`${endpoint} by contact_id exception: ${msg}`);
       }
-    } catch (err) {
-      console.log("[Lawmatics] matter search by contact failed:", err);
     }
-  }
 
-  // 2) Search by email if no contact ID provided or no matter found
-  if (email && !contactId) {
-    try {
-      const res = await lawmaticsFetch(
-        accessToken,
-        "GET",
-        `/v1/matters?search=${encodeURIComponent(email)}&per_page=5`
-      );
-      const { ok, json } = await lawmaticsJson(res);
+    // Try by email search if no results
+    if (email && matters.length === 0) {
+      try {
+        const url = `${endpoint}?search=${encodeURIComponent(email)}&per_page=25`;
+        const res = await lawmaticsFetch(accessToken, "GET", url);
+        const result = await lawmaticsJson(res);
 
-      if (ok) {
-        const matters: any[] = Array.isArray(json?.data) ? json.data : [];
-        if (matters.length > 0) {
-          const first = matters[0];
-          const idStr = pickString(first?.id);
-          const idNum = pickNumber(idStr);
-          console.log("[Lawmatics] Found existing matter by email search:", idStr);
-          return { matterId: idNum, matterIdStr: idStr, created: false };
+        attempts.push({
+          endpoint: url,
+          method: "GET",
+          status: result.status,
+          body_excerpt: result.excerpt.slice(0, 200),
+        });
+
+        if (result.ok) {
+          const data: any[] = Array.isArray(result.json?.data) ? result.json.data : [];
+          for (const m of data) {
+            const attrs = m?.attributes ?? m;
+            matters.push({
+              id: pickString(m?.id) || "",
+              case_title: pickString(attrs?.case_title ?? attrs?.name),
+              status: pickString(attrs?.status),
+              updated_at: pickString(attrs?.updated_at),
+            });
+          }
+          if (matters.length > 0) {
+            return { matters, attempts, warnings };
+          }
         }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        warnings.push(`${endpoint} by email search exception: ${msg}`);
       }
-    } catch (err) {
-      console.log("[Lawmatics] matter search by email failed:", err);
     }
   }
 
-  // 3) Create new matter
-  if (!contactId) {
-    return { matterId: null, matterIdStr: null, created: false, error: "No contact ID to create matter" };
-  }
-
-  try {
-    const payload = {
-      name: matterName || `Booking - ${attendee?.name || email || "Unknown"}`,
-      contact_id: pickNumber(contactId),
-    };
-    console.log("[Lawmatics] Creating matter:", JSON.stringify(payload));
-
-    const res = await lawmaticsFetch(accessToken, "POST", "/v1/matters", payload);
-    const { ok, status, json, excerpt } = await lawmaticsJson(res);
-
-    if (!ok) {
-      console.error("[Lawmatics] create matter failed:", status, excerpt);
-      return { matterId: null, matterIdStr: null, created: false, error: `Create failed: ${excerpt}` };
-    }
-
-    const idStr = pickString(json?.data?.id ?? json?.id);
-    const idNum = pickNumber(idStr);
-    console.log("[Lawmatics] Created matter:", idStr);
-    return { matterId: idNum, matterIdStr: idStr, created: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[Lawmatics] create matter exception:", msg);
-    return { matterId: null, matterIdStr: null, created: false, error: msg };
-  }
+  return { matters, attempts, warnings };
 }
 
 // ========== LAWMATICS EVENT/APPOINTMENT OPERATIONS ==========
@@ -798,690 +887,151 @@ export function toLocalDateTimeParts(
 export function toLocalDateTimePartsWithSeconds(
   isoDatetime: string,
   timezone: string
-): { date: string; timeHM: string; timeHMS: string } {
-  const d = new Date(isoDatetime);
-
-  const dateParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(d);
-
-  const year = dateParts.find((p) => p.type === "year")?.value || "";
-  const month = dateParts.find((p) => p.type === "month")?.value || "";
-  const day = dateParts.find((p) => p.type === "day")?.value || "";
-  const date = `${year}-${month}-${day}`.slice(0, 10);
-
-  const timeParts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(d);
-
-  const hour = timeParts.find((p) => p.type === "hour")?.value || "00";
-  const minute = timeParts.find((p) => p.type === "minute")?.value || "00";
-  const second = timeParts.find((p) => p.type === "second")?.value || "00";
-
-  return {
-    date,
-    timeHM: `${hour}:${minute}`,
-    timeHMS: `${hour}:${minute}:${second}`,
-  };
+): { date: string; time: string; timeSeconds: string } {
+  const parts = toLocalDateTimeParts(isoDatetime, timezone);
+  return { date: parts.date, time: parts.time, timeSeconds: parts.timeSeconds };
 }
 
-/**
- * Returns the timezone offset in minutes for the given instant in the provided IANA timezone.
- * Example: America/New_York in winter => -300.
- */
-export function getTimezoneOffsetMinutes(date: Date, timezone: string): number {
-  // Build the "wall clock" time in the target timezone, then interpret that as UTC.
-  // The difference between that and the actual UTC instant gives the offset.
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
+// ========== APPOINTMENT CREATION/REPAIR ==========
 
-  const year = parseInt(parts.find((p) => p.type === "year")?.value || "0", 10);
-  const month = parseInt(parts.find((p) => p.type === "month")?.value || "1", 10);
-  const day = parseInt(parts.find((p) => p.type === "day")?.value || "1", 10);
-  const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
-  const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
-  const second = parseInt(parts.find((p) => p.type === "second")?.value || "0", 10);
-
-  const asUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
-  const offsetMinutes = Math.round((asUtcMs - date.getTime()) / 60000);
-  return offsetMinutes;
-}
-
-/**
- * Format an offset (minutes) as ±HH:MM.
- */
-export function formatOffset(minutes: number): string {
-  const sign = minutes >= 0 ? "+" : "-";
-  const abs = Math.abs(minutes);
-  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
-  const mm = String(abs % 60).padStart(2, "0");
-  return `${sign}${hh}:${mm}`;
-}
-
-/**
- * Convert an ISO datetime to local ISO datetime including offset in the provided timezone.
- * Output: YYYY-MM-DDTHH:mm:ss±HH:MM
- */
-export function toLocalIsoWithOffset(isoDatetime: string, timezone: string): string {
-  const d = new Date(isoDatetime);
-  const { date, timeHMS } = toLocalDateTimePartsWithSeconds(isoDatetime, timezone);
-  const offset = getTimezoneOffsetMinutes(d, timezone);
-  return `${date}T${timeHMS}${formatOffset(offset)}`;
-}
-
-// ========== APPOINTMENT CREATION WITH MULTI-VARIANT RETRY AND REPAIR ==========
-
-export interface CreateAppointmentOptions {
+export interface AppointmentParams {
   name: string;
-  description: string;
-  startDatetime: string;  // ISO
-  endDatetime: string;    // ISO
+  description?: string;
+  startDatetime: string;
+  endDatetime: string;
   timezone: string;
-  eventTypeId: number | null;
-  locationId: number | null;
-  userId: number | null;        // Lawmatics user ID (firm host)
-  contactId: number | null;     // Lawmatics contact ID (attendee)
-  matterId?: number | null;     // Optional matter ID
-  requiresLocation: boolean;
+  eventTypeId?: number | null;
+  locationId?: number | null;
+  userId?: number | null;
+  contactId?: number | null;
+  requiresLocation?: boolean;
 }
 
-export interface CreateAppointmentResult {
-  ok: boolean;
-  complete: boolean;          // True if all required fields are populated
+export interface AppointmentResult {
   createdId: string | null;
-  readback: Record<string, any> | null;
-  missingFields: string[];
-  attempts: Array<{ step: string; status: number; ok: boolean; note?: string }>;
-  error?: string;
-}
-
-export type BookingProgressLogger = (
-  step: string,
-  level: "info" | "warn" | "error" | "success",
-  message: string,
-  details?: Record<string, any>
-) => Promise<void>;
-
-export async function resolveLawmaticsUserIdByEmail(
-  accessToken: string,
-  email: string | null
-): Promise<{ userId: number | null; timezone: string | null }> {
-  const target = (email || "").trim().toLowerCase();
-  if (!target) return { userId: null, timezone: null };
-
-  try {
-    const res = await lawmaticsFetch(accessToken, "GET", `/v1/users?per_page=200`);
-    const { ok, status, json, excerpt } = await lawmaticsJson(res);
-
-    if (!ok) {
-      console.error("[Lawmatics] resolve user by email failed:", status, excerpt);
-      return { userId: null, timezone: null };
-    }
-
-    const rawUsers: any[] = Array.isArray(json?.data)
-      ? json.data
-      : Array.isArray(json?.users)
-        ? json.users
-        : Array.isArray(json)
-          ? json
-          : [];
-
-    for (const u of rawUsers) {
-      const attrs = u?.attributes ?? u;
-      const uEmail = pickString(attrs?.email)?.toLowerCase();
-      if (uEmail === target) {
-        const userId = pickNumber(u?.id);
-        const timezone = pickString(attrs?.time_zone ?? attrs?.timezone ?? attrs?.timeZone);
-        return { userId, timezone };
-      }
-    }
-
-    return { userId: null, timezone: null };
-  } catch (err) {
-    console.error("[Lawmatics] resolve user by email exception:", err);
-    return { userId: null, timezone: null };
-  }
-}
-
-export type LawmaticsTimeFormat = "12h_seconds" | "12h" | "24h_seconds" | "24h";
-
-export type CreateOrRepairAppointmentResult = {
-  createdId: string | null;
-  ownerUserIdUsed: number | null;
-  usedTimeFormat: LawmaticsTimeFormat | null;
-  winningVariant: string | null;
   persisted: boolean;
-  timezoneUsed: string;
-  computed: {
-    start_date: string;
-    start_time: string;
-    end_date: string;
-    end_time: string;
-    starts_at: string;
-    ends_at: string;
-  };
-  attemptedVariants: string[];
-  readback: Record<string, any> | null;
-  attempts: Array<{ step: string; status: number | null; ok: boolean; note?: string }>;
+  readback: any;
   error?: string;
-};
+}
+
+type LogFn = (step: string, level: string, message: string, details?: Record<string, any>) => Promise<void>;
 
 /**
- * Create a Lawmatics appointment with comprehensive multi-variant retry and PATCH repair.
- * 
- * Strategy:
- * 1. Compute datetime strings in multiple formats (12h, 24h, with/without seconds)
- * 2. Try multiple payload structures (flat vs {event:...} wrapped)
- * 3. Use full ISO starts_at/ends_at AND date/time fields redundantly
- * 4. If creation succeeds but readback is incomplete, attempt PATCH repair
- * 5. Return detailed debug info about which variant worked
+ * Create or repair a Lawmatics appointment/event.
+ * Handles the complex logic of creating events and verifying they persist correctly.
  */
 export async function createOrRepairLawmaticsAppointment(
   accessToken: string,
-  opts: CreateAppointmentOptions,
-  progress?: BookingProgressLogger
-): Promise<CreateOrRepairAppointmentResult> {
-  const attempts: Array<{ step: string; status: number | null; ok: boolean; note?: string }> = [];
-  const attemptedVariants: string[] = [];
+  params: AppointmentParams,
+  log: LogFn
+): Promise<AppointmentResult> {
+  const { date, time } = toLocalDateTimeParts(params.startDatetime, params.timezone);
+  const { time: endTime } = toLocalDateTimeParts(params.endDatetime, params.timezone);
 
-  const tz = opts.timezone;
-
-  const log = async (
-    step: string,
-    level: "info" | "warn" | "error" | "success",
-    message: string,
-    details?: Record<string, any>
-  ) => {
-    try {
-      await progress?.(step, level, message, details);
-    } catch {
-      // Never let logging break the booking flow
-    }
-  };
-
-  // ========== COMPUTE DATETIME STRINGS ==========
-  const startParts = toLocalDateTimeParts(opts.startDatetime, tz);
-  const endParts = toLocalDateTimeParts(opts.endDatetime, tz);
-  
-  // Full ISO with Z suffix (UTC)
-  const startISO = new Date(opts.startDatetime).toISOString();
-  const endISO = new Date(opts.endDatetime).toISOString();
-  
-  // ISO with local offset
-  const starts_at_offset = toLocalIsoWithOffset(opts.startDatetime, tz);
-  const ends_at_offset = toLocalIsoWithOffset(opts.endDatetime, tz);
-
-  // Time format variants
-  const timeFormats: Record<LawmaticsTimeFormat, { start: string; end: string }> = {
-    "12h_seconds": { start: startParts.time12Seconds, end: endParts.time12Seconds },
-    "12h": { start: startParts.time12, end: endParts.time12 },
-    "24h_seconds": { start: startParts.timeSeconds, end: endParts.timeSeconds },
-    "24h": { start: startParts.time, end: endParts.time },
-  };
-
-  // Validate and coerce IDs
-  const ownerUserIdUsed = opts.userId ? pickNumber(opts.userId) : null;
-  const eventTypeId = opts.eventTypeId ? pickNumber(opts.eventTypeId) : null;
-  const locationId = opts.locationId ? pickNumber(opts.locationId) : null;
-  const contactId = opts.contactId ? pickNumber(opts.contactId) : null;
-  const matterId = opts.matterId ? pickNumber(opts.matterId) : null;
-
-  // Build base payload attributes (common to all variants)
-  const buildBasePayload = (timeFormat: LawmaticsTimeFormat, startDateValue: string, endDateValue: string) => {
-    const times = timeFormats[timeFormat];
-    const payload: Record<string, any> = {
-      name: opts.name,
-      description: opts.description,
-      all_day: false,
-      is_all_day: false,
-      
-      // ISO timestamps - include multiple forms for maximum compatibility
-      starts_at: startISO,
-      ends_at: endISO,
-      
-      // Date parts
-      start_date: startDateValue,
-      end_date: endDateValue,
-      
-      // Time parts
-      start_time: times.start,
-      end_time: times.end,
-    };
-
-    // Add IDs as NUMBERS
-    if (ownerUserIdUsed != null) {
-      payload.user_id = ownerUserIdUsed;
-      payload.user_ids = [ownerUserIdUsed];
-    }
-    if (eventTypeId != null) payload.event_type_id = eventTypeId;
-    if (locationId != null) payload.location_id = locationId;
-    if (contactId != null) {
-      payload.contact_id = contactId;
-      payload.eventable_type = "Contact";
-      payload.eventable_id = contactId;
-    }
-    if (matterId != null) payload.matter_id = matterId;
-
-    return payload;
-  };
-
-  // Define variants to try
-  // Each variant has: time format, start_date format, wrapper style
-  const variants: Array<{
-    key: string;
-    timeFormat: LawmaticsTimeFormat;
-    startDateValue: string;
-    endDateValue: string;
-    wrapper: "flat" | "event" | "data";
-  }> = [
-    // Variant A: 12h time, full ISO start_date, flat
-    { key: "A-12h-iso-flat", timeFormat: "12h_seconds", startDateValue: startISO, endDateValue: endISO, wrapper: "flat" },
-    // Variant B: 24h time, full ISO start_date, flat
-    { key: "B-24h-iso-flat", timeFormat: "24h_seconds", startDateValue: startISO, endDateValue: endISO, wrapper: "flat" },
-    // Variant C: 12h time, date-only, flat
-    { key: "C-12h-dateonly-flat", timeFormat: "12h_seconds", startDateValue: startParts.date, endDateValue: endParts.date, wrapper: "flat" },
-    // Variant D: 24h time, date-only, flat
-    { key: "D-24h-dateonly-flat", timeFormat: "24h_seconds", startDateValue: startParts.date, endDateValue: endParts.date, wrapper: "flat" },
-    // Variant E: 12h (no seconds), date-only, flat
-    { key: "E-12h-nosec-flat", timeFormat: "12h", startDateValue: startParts.date, endDateValue: endParts.date, wrapper: "flat" },
-    // Variant F: 24h (no seconds), date-only, flat
-    { key: "F-24h-nosec-flat", timeFormat: "24h", startDateValue: startParts.date, endDateValue: endParts.date, wrapper: "flat" },
-    // Variant G: 12h, ISO, {event:} wrapped
-    { key: "G-12h-iso-event", timeFormat: "12h_seconds", startDateValue: startISO, endDateValue: endISO, wrapper: "event" },
-    // Variant H: 24h, date-only, {event:} wrapped  
-    { key: "H-24h-dateonly-event", timeFormat: "24h_seconds", startDateValue: startParts.date, endDateValue: endParts.date, wrapper: "event" },
-  ];
-
-  await log("lawmatics_payload_computed", "info", "Computed Lawmatics datetime strings", {
-    timezoneUsed: tz,
-    startISO,
-    endISO,
-    starts_at_offset,
-    ends_at_offset,
-    start_date_dateonly: startParts.date,
-    time_12h: timeFormats["12h"].start,
-    time_12h_seconds: timeFormats["12h_seconds"].start,
-    time_24h: timeFormats["24h"].start,
-    time_24h_seconds: timeFormats["24h_seconds"].start,
-    ownerUserIdUsed,
-    eventTypeId,
-    locationId,
-    contactId,
-    variantCount: variants.length,
+  await log("lawmatics_create_event_start", "info", "Creating Lawmatics event", {
+    name: params.name,
+    start_date: date,
+    start_time: time,
+    end_time: endTime,
+    timezone: params.timezone,
+    event_type_id: params.eventTypeId,
+    location_id: params.locationId,
+    user_id: params.userId,
+    contact_id: params.contactId,
   });
 
-  // ========== CHECK IF READBACK IS COMPLETE ==========
-  const isPersisted = (rb: Record<string, any> | null): { ok: boolean; missing: string[] } => {
-    if (!rb) return { ok: false, missing: ["readback_null"] };
-
-    const missing: string[] = [];
-
-    // Time persistence: need EITHER starts_at/ends_at OR start_time/end_time
-    const hasStartsAt = !!rb.starts_at;
-    const hasEndsAt = !!rb.ends_at;
-    const hasStartTime = !!rb.start_time;
-    const hasEndTime = !!rb.end_time;
-    
-    if (!hasStartsAt && !hasStartTime) missing.push("start_time");
-    if (!hasEndsAt && !hasEndTime) missing.push("end_time");
-
-    if (ownerUserIdUsed) {
-      const rbUser = pickNumber(rb.user_id);
-      if (rbUser == null) missing.push("user_id");
-    }
-
-    if (eventTypeId) {
-      const got = pickNumber(rb.event_type_id);
-      if (got == null) missing.push("event_type_id");
-    }
-
-    if (locationId || opts.requiresLocation) {
-      const got = pickNumber(rb.location_id);
-      if (got == null && opts.requiresLocation) missing.push("location_id");
-    }
-
-    return { ok: missing.length === 0, missing };
+  // Build the event payload
+  const payload: Record<string, any> = {
+    name: params.name,
+    description: params.description || "",
+    start_date: date,
+    start_time: time,
+    end_time: endTime,
+    time_zone: params.timezone,
   };
 
-  let createdId: string | null = null;
-  let winningVariant: string | null = null;
-  let usedTimeFormat: LawmaticsTimeFormat | null = null;
-  let lastError: { status: number | null; excerpt?: string; message: string } | null = null;
+  if (params.eventTypeId) payload.event_type_id = params.eventTypeId;
+  if (params.locationId) payload.location_id = params.locationId;
+  if (params.userId) payload.user_id = params.userId;
+  if (params.contactId) payload.contact_id = params.contactId;
 
-  // ========== CREATE LOOP (try each variant until success) ==========
-  for (const v of variants) {
-    attemptedVariants.push(v.key);
-    
-    const basePayload = buildBasePayload(v.timeFormat, v.startDateValue, v.endDateValue);
-    
-    let body: any;
-    if (v.wrapper === "event") {
-      body = { event: basePayload };
-    } else if (v.wrapper === "data") {
-      body = { data: basePayload };
-    } else {
-      body = basePayload;
+  try {
+    const res = await lawmaticsFetch(accessToken, "POST", "/v1/events", payload);
+    const { ok, status, json, excerpt } = await lawmaticsJson(res);
+
+    if (!ok) {
+      await log("lawmatics_create_event_failed", "error", "Failed to create Lawmatics event", {
+        status,
+        excerpt,
+      });
+      return { createdId: null, persisted: false, readback: null, error: `Create failed: ${excerpt}` };
     }
 
-    await log("lawmatics_create_attempt", "info", `Attempting Lawmatics create (variant ${v.key})`, {
-      variant: v.key,
-      timeFormat: v.timeFormat,
-      startDateValue: v.startDateValue,
-      wrapper: v.wrapper,
-    });
-
-    try {
-      const res = await lawmaticsFetch(accessToken, "POST", "/v1/events", body);
-      const { ok, status, json, excerpt } = await lawmaticsJson(res);
-      attempts.push({ step: `create_${v.key}`, ok, status, note: excerpt?.slice(0, 200) || undefined });
-
-      if (!ok) {
-        lastError = { status, excerpt, message: `Lawmatics create failed (${status}): ${excerpt?.slice(0, 100)}` };
-        console.log(`[Lawmatics] Variant ${v.key} failed:`, status, excerpt?.slice(0, 200));
-        continue;
-      }
-
-      const id = pickString(json?.data?.id ?? json?.id);
-      if (!id) {
-        lastError = { status, excerpt, message: "Lawmatics create returned no id" };
-        console.log(`[Lawmatics] Variant ${v.key} returned no id`);
-        continue;
-      }
-
-      createdId = id;
-      winningVariant = v.key;
-      usedTimeFormat = v.timeFormat;
-
-      console.log(`[Lawmatics] Created event ID ${id} with variant ${v.key}`);
-
-      // Check readback
-      const readback = await lawmaticsReadEvent(accessToken, createdId);
-      const persistedCheck = isPersisted(readback);
-
-      await log(
-        "lawmatics_readback_after_create",
-        persistedCheck.ok ? "success" : "warn",
-        `Lawmatics readback after create (variant ${v.key})`,
-        {
-          event_id: createdId,
-          variant: v.key,
-          persisted: persistedCheck.ok,
-          missingFields: persistedCheck.missing,
-          readback: {
-            starts_at: readback?.starts_at,
-            ends_at: readback?.ends_at,
-            start_date: readback?.start_date,
-            start_time: readback?.start_time,
-            end_date: readback?.end_date,
-            end_time: readback?.end_time,
-            user_id: readback?.user_id,
-            event_type_id: readback?.event_type_id,
-            location_id: readback?.location_id,
-          },
-        }
-      );
-
-      if (persistedCheck.ok) {
-        // Success! Everything persisted
-        return {
-          createdId,
-          ownerUserIdUsed,
-          usedTimeFormat,
-          winningVariant,
-          persisted: true,
-          timezoneUsed: tz,
-          computed: {
-            start_date: v.startDateValue,
-            start_time: timeFormats[v.timeFormat].start,
-            end_date: v.endDateValue,
-            end_time: timeFormats[v.timeFormat].end,
-            starts_at: startISO,
-            ends_at: endISO,
-          },
-          attemptedVariants,
-          readback,
-          attempts,
-        };
-      }
-
-      // Created but incomplete - break to repair loop
-      console.log(`[Lawmatics] Variant ${v.key} created but missing:`, persistedCheck.missing);
-      break;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      lastError = { status: null, message: `Lawmatics create exception: ${msg}` };
-      attempts.push({ step: `create_${v.key}`, ok: false, status: null, note: msg });
-      console.error(`[Lawmatics] Variant ${v.key} exception:`, msg);
-      continue;
+    const createdId = pickString(json?.data?.id ?? json?.id);
+    
+    if (!createdId) {
+      await log("lawmatics_create_event_no_id", "error", "Lawmatics event created but no ID returned", {
+        json,
+      });
+      return { createdId: null, persisted: false, readback: null, error: "No event ID returned" };
     }
-  }
 
-  // ========== CREATION FAILED COMPLETELY ==========
-  if (!createdId) {
-    await log("lawmatics_create_failed", "error", "All Lawmatics create variants failed", {
-      attemptedVariants,
-      lastError,
-      attempts: attempts.slice(-8),
-    });
-
-    return {
-      createdId: null,
-      ownerUserIdUsed,
-      usedTimeFormat: null,
-      winningVariant: null,
-      persisted: false,
-      timezoneUsed: tz,
-      computed: {
-        start_date: startParts.date,
-        start_time: startParts.timeSeconds,
-        end_date: endParts.date,
-        end_time: endParts.timeSeconds,
-        starts_at: startISO,
-        ends_at: endISO,
-      },
-      attemptedVariants,
-      readback: null,
-      attempts,
-      error: lastError?.excerpt
-        ? `${lastError.message}`
-        : lastError?.message || "Lawmatics create failed (all variants)",
-    };
-  }
-
-  // ========== REPAIR LOOP (PATCH with minimal payloads) ==========
-  await log("lawmatics_repair_start", "warn", "Lawmatics event created but incomplete; attempting PATCH repair", {
-    event_id: createdId,
-    winningVariant,
-  });
-
-  // Try PATCH with minimal payloads in different formats
-  const repairPayloads: Array<{ key: string; payload: Record<string, any> }> = [
-    // Minimal: just times + core IDs
-    {
-      key: "repair-minimal-12h",
-      payload: {
-        starts_at: startISO,
-        ends_at: endISO,
-        start_time: timeFormats["12h_seconds"].start,
-        end_time: timeFormats["12h_seconds"].end,
-        all_day: false,
-        is_all_day: false,
-        ...(ownerUserIdUsed != null && { user_id: ownerUserIdUsed }),
-        ...(eventTypeId != null && { event_type_id: eventTypeId }),
-        ...(locationId != null && { location_id: locationId }),
-      },
-    },
-    {
-      key: "repair-minimal-24h",
-      payload: {
-        starts_at: startISO,
-        ends_at: endISO,
-        start_time: timeFormats["24h_seconds"].start,
-        end_time: timeFormats["24h_seconds"].end,
-        all_day: false,
-        is_all_day: false,
-        ...(ownerUserIdUsed != null && { user_id: ownerUserIdUsed }),
-        ...(eventTypeId != null && { event_type_id: eventTypeId }),
-        ...(locationId != null && { location_id: locationId }),
-      },
-    },
-    // Try with {event:} wrapper
-    {
-      key: "repair-event-wrapped",
-      payload: {
-        event: {
-          starts_at: startISO,
-          ends_at: endISO,
-          start_time: timeFormats["12h"].start,
-          end_time: timeFormats["12h"].end,
-          all_day: false,
-          ...(ownerUserIdUsed != null && { user_id: ownerUserIdUsed }),
-        },
-      },
-    },
-  ];
-
-  for (const rp of repairPayloads) {
-    attemptedVariants.push(`PATCH:${rp.key}`);
-
-    await log("lawmatics_repair_attempt", "info", `Attempting PATCH repair (${rp.key})`, {
+    await log("lawmatics_create_event_success", "success", `Lawmatics event created: ${createdId}`, {
       event_id: createdId,
-      repair_key: rp.key,
     });
 
-    try {
-      const patchResult = await lawmaticsUpdateEvent(accessToken, createdId, "PATCH", rp.payload);
-      attempts.push({ step: rp.key, ok: patchResult.ok, status: patchResult.status, note: patchResult.excerpt?.slice(0, 200) });
-
-      if (!patchResult.ok) {
-        console.log(`[Lawmatics] PATCH ${rp.key} failed:`, patchResult.status, patchResult.excerpt?.slice(0, 100));
-        continue;
-      }
-
-      const readback = await lawmaticsReadEvent(accessToken, createdId);
-      const persistedCheck = isPersisted(readback);
-
-      await log(
-        "lawmatics_readback_after_repair",
-        persistedCheck.ok ? "success" : "warn",
-        `Lawmatics readback after PATCH repair (${rp.key})`,
-        {
-          event_id: createdId,
-          repair_key: rp.key,
-          persisted: persistedCheck.ok,
-          missingFields: persistedCheck.missing,
-          readback: {
-            starts_at: readback?.starts_at,
-            ends_at: readback?.ends_at,
-            start_time: readback?.start_time,
-            end_time: readback?.end_time,
-            user_id: readback?.user_id,
-          },
-        }
-      );
-
-      if (persistedCheck.ok) {
-        return {
-          createdId,
-          ownerUserIdUsed,
-          usedTimeFormat,
-          winningVariant: `${winningVariant}+${rp.key}`,
-          persisted: true,
-          timezoneUsed: tz,
-          computed: {
-            start_date: startParts.date,
-            start_time: timeFormats[usedTimeFormat || "12h_seconds"].start,
-            end_date: endParts.date,
-            end_time: timeFormats[usedTimeFormat || "12h_seconds"].end,
-            starts_at: startISO,
-            ends_at: endISO,
-          },
-          attemptedVariants,
-          readback,
-          attempts,
-        };
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      attempts.push({ step: rp.key, ok: false, status: null, note: msg });
-      console.error(`[Lawmatics] PATCH ${rp.key} exception:`, msg);
+    // Read back and verify
+    const readback = await lawmaticsReadEvent(accessToken, createdId);
+    
+    if (!readback) {
+      await log("lawmatics_readback_failed", "warn", "Could not read back created event", {
+        event_id: createdId,
+      });
+      return { createdId, persisted: false, readback: null, error: "Readback failed" };
     }
+
+    // Check if times and owner persisted
+    const timesOk = readback.start_date === date && readback.start_time === time;
+    const ownerOk = !params.userId || readback.user_id === String(params.userId);
+
+    if (!timesOk || !ownerOk) {
+      await log("lawmatics_readback_mismatch", "warn", "Event created but fields may not have persisted correctly", {
+        expected_date: date,
+        expected_time: time,
+        expected_user_id: params.userId,
+        actual_date: readback.start_date,
+        actual_time: readback.start_time,
+        actual_user_id: readback.user_id,
+      });
+    }
+
+    return { 
+      createdId, 
+      persisted: timesOk && ownerOk, 
+      readback,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await log("lawmatics_create_event_exception", "error", `Exception creating event: ${msg}`, {});
+    return { createdId: null, persisted: false, readback: null, error: msg };
   }
-
-  // ========== REPAIR FAILED - return incomplete ==========
-  const finalReadback = await lawmaticsReadEvent(accessToken, createdId);
-  const finalCheck = isPersisted(finalReadback);
-
-  await log("lawmatics_repair_failed", "error", "Lawmatics event created but repairs did not persist required fields", {
-    event_id: createdId,
-    missingFields: finalCheck.missing,
-    readback: finalReadback,
-    attemptedVariants,
-  });
-
-  return {
-    createdId,
-    ownerUserIdUsed,
-    usedTimeFormat,
-    winningVariant,
-    persisted: false,
-    timezoneUsed: tz,
-    computed: {
-      start_date: startParts.date,
-      start_time: startParts.timeSeconds,
-      end_date: endParts.date,
-      end_time: endParts.timeSeconds,
-      starts_at: startISO,
-      ends_at: endISO,
-    },
-    attemptedVariants,
-    readback: finalReadback,
-    attempts,
-    error: `Lawmatics event created but did not persist required fields: ${finalCheck.missing.join(", ")}`,
-  };
 }
 
+// ========== LAWMATICS USER RESOLUTION (ALIAS) ==========
+
 /**
- * Back-compat wrapper: returns the original CreateAppointmentResult shape.
+ * Alias for lawmaticsResolveUserByEmail that returns a simpler object for booking flows.
  */
-export async function createLawmaticsAppointment(
+export async function resolveLawmaticsUserIdByEmail(
   accessToken: string,
-  opts: CreateAppointmentOptions
-): Promise<CreateAppointmentResult> {
-  const r = await createOrRepairLawmaticsAppointment(accessToken, opts);
-
-  const missingFields: string[] = [];
-  if (!r.createdId) missingFields.push("create_failed");
-  if (r.createdId && !r.persisted) {
-    if (!r.readback?.start_time && !r.readback?.starts_at) missingFields.push("start_time");
-    if (!r.readback?.end_time && !r.readback?.ends_at) missingFields.push("end_time");
-  }
-  if (opts.userId && !pickNumber(r.readback?.user_id)) missingFields.push("user_id");
-  if (opts.eventTypeId && !pickNumber(r.readback?.event_type_id)) missingFields.push("event_type_id");
-  if ((opts.locationId || opts.requiresLocation) && !pickNumber(r.readback?.location_id)) missingFields.push("location_id");
-
+  email: string | null
+): Promise<{
+  userId: number | null;
+  timezone: string | null;
+}> {
+  const result = await lawmaticsResolveUserByEmail(accessToken, email);
   return {
-    ok: !!r.createdId,
-    complete: r.persisted,
-    createdId: r.createdId,
-    readback: r.readback,
-    missingFields,
-    attempts: r.attempts.map((a) => ({ step: a.step, status: a.status ?? 0, ok: a.ok, note: a.note })),
-    error: r.error,
+    userId: result.userId,
+    timezone: result.user?.timezone || null,
   };
 }
