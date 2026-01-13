@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { addDays, format } from "date-fns";
 import {
@@ -26,13 +27,13 @@ import {
   Copy,
   Mail,
   ExternalLink,
-  Calendar,
   AlertCircle,
+  Calendar,
 } from "lucide-react";
 import { copyToClipboard, getBookingUrl, generateClientEmailTemplate } from "@/lib/clipboard";
 
+// Updated steps - removed Calendar tab, participants now includes company member selection
 const STEPS = [
-  { id: "calendar", label: "Calendar", icon: Calendar },
   { id: "client", label: "Client Details", icon: User },
   { id: "meeting", label: "Meeting Type", icon: FileText },
   { id: "participants", label: "Participants", icon: Users },
@@ -41,11 +42,12 @@ const STEPS = [
   { id: "review", label: "Review", icon: CheckCircle },
 ];
 
-interface AdminCalendar {
+interface CompanyMember {
   id: string;
-  summary: string;
-  primary: boolean;
-  accessRole: string;
+  name: string;
+  email: string;
+  role: string;
+  hasGoogleConnection: boolean;
 }
 
 interface FormData {
@@ -55,14 +57,13 @@ interface FormData {
   meetingTypeId: string;
   duration: number;
   locationMode: "Zoom" | "InPerson";
-  hostAttorneyId: string;
-  supportStaffIds: string[];
+  hostUserId: string; // Host/Organizer (single select)
+  participantUserIds: string[]; // Additional participants (multi-select)
   roomId: string;
   searchWindowDays: number;
   allowWeekends: boolean;
   timePreference: string;
   minNoticeHours: number;
-  googleCalendarId: string; // Admin-selected calendar for creating events
 }
 
 const initialFormData: FormData = {
@@ -72,14 +73,13 @@ const initialFormData: FormData = {
   meetingTypeId: "",
   duration: 60,
   locationMode: "Zoom",
-  hostAttorneyId: "",
-  supportStaffIds: [],
+  hostUserId: "",
+  participantUserIds: [],
   roomId: "",
   searchWindowDays: 30,
   allowWeekends: false,
   timePreference: "None",
   minNoticeHours: 24,
-  googleCalendarId: "", // Will be set when admin selects a calendar
 };
 
 export default function RequestNew() {
@@ -90,55 +90,6 @@ export default function RequestNew() {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [createdToken, setCreatedToken] = useState<string | null>(null);
-  const [adminCalendars, setAdminCalendars] = useState<AdminCalendar[]>([]);
-  const [calendarsLoading, setCalendarsLoading] = useState(true);
-  const [calendarsError, setCalendarsError] = useState<string | null>(null);
-
-  // Fetch admin's Google calendars on mount
-  useEffect(() => {
-    async function fetchCalendars() {
-      setCalendarsLoading(true);
-      setCalendarsError(null);
-      
-      try {
-        const { data, error } = await supabase.functions.invoke("google-list-calendars", {
-          body: {},
-        });
-        
-        if (error) {
-          console.error("Failed to fetch calendars:", error);
-          setCalendarsError("Failed to load calendars. Please check your Google connection.");
-          setAdminCalendars([]);
-        } else if (data?.error && data.calendars?.length === 0) {
-          setCalendarsError(data.error);
-          setAdminCalendars([]);
-        } else {
-          // Filter to only writable calendars (owner or writer access)
-          const writableCalendars = (data?.calendars || []).filter(
-            (cal: AdminCalendar) => cal.accessRole === "owner" || cal.accessRole === "writer"
-          );
-          setAdminCalendars(writableCalendars);
-          
-          // Auto-select primary calendar if none selected
-          if (!formData.googleCalendarId && writableCalendars.length > 0) {
-            const primaryCal = writableCalendars.find((c: AdminCalendar) => c.primary);
-            if (primaryCal) {
-              updateForm({ googleCalendarId: primaryCal.id });
-            } else {
-              updateForm({ googleCalendarId: writableCalendars[0].id });
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Error fetching calendars:", err);
-        setCalendarsError("Failed to load calendars.");
-      } finally {
-        setCalendarsLoading(false);
-      }
-    }
-    
-    fetchCalendars();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch meeting types
   const { data: meetingTypes } = useQuery({
@@ -153,44 +104,36 @@ export default function RequestNew() {
     },
   });
 
-  // Fetch attorneys (users with admin role in user_roles table)
-  const { data: attorneys } = useQuery({
-    queryKey: ["users-attorneys-admin"],
+  // Fetch company members (users in the same company as current user)
+  // RLS will automatically filter to same company due to get_current_user_company_id()
+  const { data: companyMembers, isLoading: membersLoading } = useQuery({
+    queryKey: ["company-members"],
     queryFn: async () => {
-      // First get user IDs that have admin role
-      const { data: adminRoles, error: rolesError } = await supabase
-        .from("user_roles")
-        .select("user_id")
-        .eq("role", "admin");
-      
-      if (rolesError) throw rolesError;
-      if (!adminRoles || adminRoles.length === 0) return [];
-
-      const adminAuthIds = adminRoles.map((r) => r.user_id);
-      
-      // Then get users matching those auth_user_ids
-      const { data, error } = await supabase
-        .from("users")
-        .select("id, name, email, role, auth_user_id")
-        .eq("active", true)
-        .in("auth_user_id", adminAuthIds);
-      
-      if (error) throw error;
-      return data || [];
-    },
-  });
-
-  // Fetch support staff
-  const { data: supportStaff } = useQuery({
-    queryKey: ["users-support"],
-    queryFn: async () => {
-      const { data, error } = await supabase
+      // Fetch all active users (RLS filters by company)
+      const { data: users, error: usersError } = await supabase
         .from("users")
         .select("id, name, email, role")
-        .eq("active", true)
-        .eq("role", "SupportStaff");
-      if (error) throw error;
-      return data || [];
+        .eq("active", true);
+      
+      if (usersError) throw usersError;
+
+      // Fetch calendar connections to determine who has Google connected
+      const { data: connections } = await supabase
+        .from("calendar_connections")
+        .select("user_id")
+        .eq("provider", "google");
+
+      const connectedUserIds = new Set((connections || []).map(c => c.user_id));
+
+      const members: CompanyMember[] = (users || []).map(u => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        hasGoogleConnection: connectedUserIds.has(u.id),
+      }));
+
+      return members;
     },
   });
 
@@ -209,15 +152,22 @@ export default function RequestNew() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      // Create meeting - persist admin creator and selected calendar for downstream Google event creation
+      // All selected participants = host + additional participants
+      const allParticipantIds = [
+        formData.hostUserId,
+        ...formData.participantUserIds,
+      ].filter(Boolean);
+
+      // Create meeting with participant_user_ids for availability calculation
       const { data: meeting, error: meetingError } = await supabase
         .from("meetings")
         .insert({
           meeting_type_id: formData.meetingTypeId || null,
           duration_minutes: formData.duration,
           location_mode: formData.locationMode,
-          host_attorney_user_id: formData.hostAttorneyId || null,
-          support_user_ids: formData.supportStaffIds,
+          host_attorney_user_id: formData.hostUserId || null,
+          support_user_ids: [], // Legacy field, not used for participants anymore
+          participant_user_ids: allParticipantIds, // New: all selected participants
           room_id: formData.locationMode === "InPerson" && formData.roomId ? formData.roomId : null,
           external_attendees: [
             {
@@ -233,9 +183,8 @@ export default function RequestNew() {
           },
           search_window_days_used: formData.searchWindowDays,
           status: "Proposed",
-          // Store admin creator and selected calendar for Google event creation at confirm time
           created_by_user_id: internalUser?.id || null,
-          google_calendar_id: formData.googleCalendarId || null,
+          // google_calendar_id will be determined from host's selected calendar at confirm time
         })
         .select("id")
         .single();
@@ -245,7 +194,7 @@ export default function RequestNew() {
         throw meetingError;
       }
 
-      // Create booking request - explicitly select only needed columns
+      // Create booking request
       const expiresAt = addDays(new Date(), 7);
       const { data: bookingRequest, error: brError } = await supabase
         .from("booking_requests")
@@ -271,19 +220,10 @@ export default function RequestNew() {
     },
     onError: (error: Error & { code?: string; details?: string; hint?: string }) => {
       console.error("[CreateRequest] Full error object:", error);
-      // Improved error message for permission denied issues
-      const isUsersPermissionError = error.message?.toLowerCase().includes("permission denied for table user");
-      if (isUsersPermissionError) {
-        toast.error("Create Request failed due to restricted access to users table. This is a UI query/RLS issue.", {
-          description: `Code: ${error.code || "unknown"} | ${error.message}`,
-          duration: 10000,
-        });
-      } else {
-        toast.error(`Failed to create request: ${error.message}`, {
-          description: error.details || error.hint || undefined,
-          duration: 8000,
-        });
-      }
+      toast.error(`Failed to create request: ${error.message}`, {
+        description: error.details || error.hint || undefined,
+        duration: 8000,
+      });
     },
   });
 
@@ -291,19 +231,14 @@ export default function RequestNew() {
     const newErrors: Record<string, string> = {};
 
     switch (step) {
-      case 0: // Calendar selection
-        if (!formData.googleCalendarId) {
-          newErrors.googleCalendarId = "Please select a calendar for booking events";
-        }
-        break;
-      case 1: // Client details
+      case 0: // Client details
         if (!formData.clientName.trim()) newErrors.clientName = "Name is required";
         if (!formData.clientEmail.trim()) newErrors.clientEmail = "Email is required";
         else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.clientEmail)) {
           newErrors.clientEmail = "Invalid email format";
         }
         break;
-      case 2: // Meeting type
+      case 1: // Meeting type
         if (!formData.meetingTypeId) {
           newErrors.meetingTypeId = "Meeting type is required";
         }
@@ -311,17 +246,17 @@ export default function RequestNew() {
           newErrors.duration = "Duration must be at least 15 minutes";
         }
         break;
-      case 3: // Participants
-        if (!formData.hostAttorneyId) {
-          newErrors.hostAttorneyId = "Host attorney is required";
+      case 2: // Participants
+        if (!formData.hostUserId) {
+          newErrors.hostUserId = "Host/Organizer is required";
         }
         break;
-      case 4: // Room
+      case 3: // Room
         if (formData.locationMode === "InPerson" && !formData.roomId) {
           newErrors.roomId = "Room is required for in-person meetings";
         }
         break;
-      case 5: // Schedule
+      case 4: // Schedule
         if (!formData.searchWindowDays || formData.searchWindowDays < 1) {
           newErrors.searchWindowDays = "Search window must be at least 1 day";
         }
@@ -357,6 +292,18 @@ export default function RequestNew() {
 
   const selectedMeetingType = meetingTypes?.find((mt) => mt.id === formData.meetingTypeId);
   const progressPercent = ((currentStep + 1) / STEPS.length) * 100;
+
+  // Get host and participant display info
+  const hostMember = companyMembers?.find((m) => m.id === formData.hostUserId);
+  const selectedParticipants = companyMembers?.filter((m) => 
+    formData.participantUserIds.includes(m.id)
+  ) || [];
+
+  // Check if any selected participant has no Google connection
+  const participantsWithoutGoogle = [
+    ...(hostMember && !hostMember.hasGoogleConnection ? [hostMember] : []),
+    ...selectedParticipants.filter((p) => !p.hasGoogleConnection),
+  ];
 
   // Success state
   if (createdToken) {
@@ -467,65 +414,8 @@ export default function RequestNew() {
             <CardTitle>{STEPS[currentStep].label}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Step 0: Calendar Selection */}
+            {/* Step 0: Client Details */}
             {currentStep === 0 && (
-              <>
-                <div>
-                  <Label>Admin Calendar to Book On *</Label>
-                  {calendarsLoading ? (
-                    <div className="flex items-center gap-2 py-3 text-muted-foreground">
-                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                      Loading calendars...
-                    </div>
-                  ) : calendarsError ? (
-                    <div className="flex items-start gap-2 py-3 text-destructive">
-                      <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-sm">{calendarsError}</p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Please connect your Google Calendar in Admin Settings.
-                        </p>
-                      </div>
-                    </div>
-                  ) : adminCalendars.length === 0 ? (
-                    <div className="flex items-start gap-2 py-3 text-status-warning">
-                      <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-sm">No writable calendars found</p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Connect a Google Calendar with write access in Admin Settings.
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <Select
-                      value={formData.googleCalendarId}
-                      onValueChange={(v) => updateForm({ googleCalendarId: v })}
-                    >
-                      <SelectTrigger className={errors.googleCalendarId ? "border-destructive" : ""}>
-                        <SelectValue placeholder="Select a calendar" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {adminCalendars.map((cal) => (
-                          <SelectItem key={cal.id} value={cal.id}>
-                            {cal.summary} {cal.primary && "(Primary)"}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                  {errors.googleCalendarId && (
-                    <p className="text-sm text-destructive mt-1">{errors.googleCalendarId}</p>
-                  )}
-                  <p className="text-sm text-muted-foreground mt-2">
-                    Confirmed bookings will create events on this calendar.
-                  </p>
-                </div>
-              </>
-            )}
-
-            {/* Step 1: Client Details */}
-            {currentStep === 1 && (
               <>
                 <div>
                   <Label htmlFor="clientName">Client Name *</Label>
@@ -567,8 +457,8 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 2: Meeting Type */}
-            {currentStep === 2 && (
+            {/* Step 1: Meeting Type */}
+            {currentStep === 1 && (
               <>
                 <div>
                   <Label>Meeting Type *</Label>
@@ -634,68 +524,123 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 3: Participants */}
-            {currentStep === 3 && (
+            {/* Step 2: Participants - Company Members Multi-Select */}
+            {currentStep === 2 && (
               <>
                 <div>
-                  <Label>Host Attorney *</Label>
-                  <Select
-                    value={formData.hostAttorneyId}
-                    onValueChange={(v) => updateForm({ hostAttorneyId: v })}
-                  >
-                    <SelectTrigger className={errors.hostAttorneyId ? "border-destructive" : ""}>
-                      <SelectValue placeholder="Select host attorney" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {attorneys?.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {errors.hostAttorneyId && (
-                    <p className="text-sm text-destructive mt-1">{errors.hostAttorneyId}</p>
-                  )}
-                  <p className="text-sm text-muted-foreground mt-1">
-                    The primary attorney for this meeting
+                  <Label>Host / Organizer *</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    The primary organizer for this meeting. Their calendar will be used for event creation.
                   </p>
+                  {membersLoading ? (
+                    <div className="flex items-center gap-2 py-3 text-muted-foreground">
+                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      Loading team members...
+                    </div>
+                  ) : (
+                    <Select
+                      value={formData.hostUserId}
+                      onValueChange={(v) => {
+                        // Remove from participants if selecting as host
+                        updateForm({ 
+                          hostUserId: v,
+                          participantUserIds: formData.participantUserIds.filter(id => id !== v),
+                        });
+                      }}
+                    >
+                      <SelectTrigger className={errors.hostUserId ? "border-destructive" : ""}>
+                        <SelectValue placeholder="Select host/organizer" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companyMembers?.map((member) => (
+                          <SelectItem key={member.id} value={member.id}>
+                            <div className="flex items-center gap-2">
+                              <span>{member.name}</span>
+                              <span className="text-muted-foreground text-xs">({member.email})</span>
+                              {!member.hasGoogleConnection && (
+                                <Badge variant="outline" className="text-xs bg-status-warning/10 text-status-warning border-status-warning/30">
+                                  No Calendar
+                                </Badge>
+                              )}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {errors.hostUserId && (
+                    <p className="text-sm text-destructive mt-1">{errors.hostUserId}</p>
+                  )}
                 </div>
+
                 <div>
-                  <Label>Support Staff</Label>
-                  <div className="space-y-2 mt-2">
-                    {supportStaff?.map((s) => (
-                      <div key={s.id} className="flex items-center space-x-2">
-                        <Checkbox
-                          id={s.id}
-                          checked={formData.supportStaffIds.includes(s.id)}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              updateForm({
-                                supportStaffIds: [...formData.supportStaffIds, s.id],
-                              });
-                            } else {
-                              updateForm({
-                                supportStaffIds: formData.supportStaffIds.filter((id) => id !== s.id),
-                              });
-                            }
-                          }}
-                        />
-                        <Label htmlFor={s.id} className="font-normal cursor-pointer">
-                          {s.name}
-                        </Label>
+                  <Label>Additional Participants</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Select team members whose calendars should be checked for availability.
+                  </p>
+                  <div className="space-y-2 max-h-60 overflow-y-auto border rounded-md p-3">
+                    {membersLoading ? (
+                      <div className="flex items-center gap-2 py-3 text-muted-foreground">
+                        <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                        Loading...
                       </div>
-                    ))}
-                    {(!supportStaff || supportStaff.length === 0) && (
-                      <p className="text-sm text-muted-foreground">No support staff configured</p>
+                    ) : companyMembers?.filter(m => m.id !== formData.hostUserId).length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-2">
+                        No other team members available
+                      </p>
+                    ) : (
+                      companyMembers
+                        ?.filter(m => m.id !== formData.hostUserId)
+                        .map((member) => (
+                          <div key={member.id} className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`participant-${member.id}`}
+                              checked={formData.participantUserIds.includes(member.id)}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  updateForm({
+                                    participantUserIds: [...formData.participantUserIds, member.id],
+                                  });
+                                } else {
+                                  updateForm({
+                                    participantUserIds: formData.participantUserIds.filter((id) => id !== member.id),
+                                  });
+                                }
+                              }}
+                            />
+                            <Label htmlFor={`participant-${member.id}`} className="font-normal cursor-pointer flex items-center gap-2 flex-1">
+                              <span>{member.name}</span>
+                              <span className="text-muted-foreground text-xs">({member.email})</span>
+                              {!member.hasGoogleConnection && (
+                                <Badge variant="outline" className="text-xs bg-status-warning/10 text-status-warning border-status-warning/30">
+                                  No Calendar
+                                </Badge>
+                              )}
+                            </Label>
+                          </div>
+                        ))
                     )}
                   </div>
                 </div>
+
+                {/* Warning for participants without Google connection */}
+                {participantsWithoutGoogle.length > 0 && (
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-status-warning/10 border border-status-warning/30">
+                    <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
+                    <div className="text-sm">
+                      <p className="font-medium text-status-warning">Calendar availability may be incomplete</p>
+                      <p className="text-muted-foreground mt-1">
+                        The following participants don't have Google Calendar connected: {participantsWithoutGoogle.map(p => p.name).join(", ")}. 
+                        Their availability won't be checked automatically.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
-            {/* Step 4: Room */}
-            {currentStep === 4 && (
+            {/* Step 3: Room */}
+            {currentStep === 3 && (
               <>
                 {formData.locationMode === "Zoom" ? (
                   <div className="text-center py-8">
@@ -740,8 +685,8 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 5: Scheduling */}
-            {currentStep === 5 && (
+            {/* Step 4: Scheduling */}
+            {currentStep === 4 && (
               <>
                 <div>
                   <Label htmlFor="searchWindow">Search Window (days)</Label>
@@ -816,16 +761,10 @@ export default function RequestNew() {
               </>
             )}
 
-            {/* Step 6: Review */}
-            {currentStep === 6 && (
+            {/* Step 5: Review */}
+            {currentStep === 5 && (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Calendar</p>
-                    <p className="font-medium">
-                      {adminCalendars.find((c) => c.id === formData.googleCalendarId)?.summary || formData.googleCalendarId}
-                    </p>
-                  </div>
                   <div>
                     <p className="text-sm text-muted-foreground">Client</p>
                     <p className="font-medium">{formData.clientName}</p>
@@ -848,11 +787,16 @@ export default function RequestNew() {
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Host Attorney</p>
-                    <p className="font-medium">
-                      {attorneys?.find((a) => a.id === formData.hostAttorneyId)?.name}
-                    </p>
+                    <p className="text-sm text-muted-foreground">Host / Organizer</p>
+                    <p className="font-medium">{hostMember?.name}</p>
+                    <p className="text-xs text-muted-foreground">{hostMember?.email}</p>
                   </div>
+                  {selectedParticipants.length > 0 && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">Participants</p>
+                      <p className="font-medium">{selectedParticipants.map(p => p.name).join(", ")}</p>
+                    </div>
+                  )}
                   {formData.roomId && formData.locationMode === "InPerson" && (
                     <div>
                       <p className="text-sm text-muted-foreground">Room</p>
@@ -872,43 +816,58 @@ export default function RequestNew() {
                     </p>
                   </div>
                 </div>
+                
+                {participantsWithoutGoogle.length > 0 && (
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-status-warning/10 border border-status-warning/30">
+                    <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
+                    <div className="text-sm">
+                      <p className="text-muted-foreground">
+                        Some participants don't have Google Calendar connected. Their availability won't be checked.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="bg-muted rounded-lg p-4 text-sm">
                   <p className="font-medium text-foreground mb-1">What happens next?</p>
                   <p className="text-muted-foreground">
                     After you create this request, you'll get a link to send to {formData.clientName}. 
-                    They'll be able to pick from available times that work for everyone's calendar.
-                    Confirmed bookings will create events on your selected calendar.
+                    They'll be able to pick from available times that work for all selected participants' calendars.
                   </p>
                 </div>
               </div>
             )}
           </CardContent>
-
-          {/* Navigation */}
-          <div className="flex justify-between p-6 pt-0">
-            <Button variant="outline" onClick={handleBack}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              {currentStep === 0 ? "Cancel" : "Back"}
-            </Button>
-            <Button onClick={handleNext} disabled={createMutation.isPending}>
-              {currentStep === STEPS.length - 1 ? (
-                createMutation.isPending ? (
-                  "Creating..."
-                ) : (
-                  <>
-                    Create Request
-                    <CheckCircle className="w-4 h-4 ml-2" />
-                  </>
-                )
-              ) : (
-                <>
-                  Next
-                  <ArrowRight className="w-4 h-4 ml-2" />
-                </>
-              )}
-            </Button>
-          </div>
         </Card>
+
+        {/* Navigation buttons */}
+        <div className="flex justify-between mt-6">
+          <Button variant="outline" onClick={handleBack}>
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            {currentStep === 0 ? "Cancel" : "Back"}
+          </Button>
+          <Button
+            onClick={handleNext}
+            disabled={createMutation.isPending}
+          >
+            {createMutation.isPending ? (
+              <>
+                <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin mr-2" />
+                Creating...
+              </>
+            ) : currentStep === STEPS.length - 1 ? (
+              <>
+                Create Request
+                <CheckCircle className="w-4 h-4 ml-2" />
+              </>
+            ) : (
+              <>
+                Next
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </>
+            )}
+          </Button>
+        </div>
       </div>
     </MainLayout>
   );

@@ -24,8 +24,9 @@ interface MeetingDetails {
   external_attendees: { name?: string; email?: string; phone?: string }[];
   timezone: string;
   host_attorney_user_id: string | null;
-  created_by_user_id: string | null; // Admin who created the booking request
-  google_calendar_id: string | null; // Admin-selected calendar for creating events
+  created_by_user_id: string | null;
+  google_calendar_id: string | null;
+  participant_user_ids: string[];
   meeting_type_id: string | null;
   room_id: string | null;
   booking_request_id: string | null;
@@ -187,12 +188,13 @@ async function writeLog(
 }
 
 
-// Helper to create Google Calendar event on the ADMIN's selected calendar
+// Helper to create Google Calendar event with HOST as organizer and ALL participants as attendees
 // Returns the created event ID for persistence
 async function createGoogleCalendarEvent(
   supabase: any,
   meeting: MeetingDetails,
   hostAttorney: { name: string; email: string } | null,
+  participantEmails: string[],
   startDatetime: string,
   endDatetime: string
 ): Promise<{ success: boolean; eventId?: string; error?: string }> {
@@ -203,24 +205,27 @@ async function createGoogleCalendarEvent(
     return { success: false, error: "Google OAuth not configured" };
   }
 
-  // Use the admin who created the booking request (created_by_user_id)
-  if (!meeting.created_by_user_id) {
-    return { success: false, error: "No admin creator assigned to meeting" };
+  // Use host_attorney_user_id as the organizer for Google event
+  if (!meeting.host_attorney_user_id) {
+    return { success: false, error: "No host assigned to meeting" };
   }
 
-  // Use the admin-selected calendar ID, or fallback to "primary"
-  const targetCalendarId = meeting.google_calendar_id || "primary";
-
-  // Get Google calendar connection for the ADMIN who created the booking request
+  // Get Google calendar connection for the HOST (organizer)
   const { data: calendarConnection } = await supabase
     .from("calendar_connections")
     .select("*")
     .eq("provider", "google")
-    .eq("user_id", meeting.created_by_user_id)
+    .eq("user_id", meeting.host_attorney_user_id)
     .maybeSingle();
 
   if (!calendarConnection) {
-    return { success: false, error: "No Google calendar connection for admin user" };
+    return { success: false, error: "No Google calendar connection for host user" };
+  }
+
+  // Use the host's primary or first selected calendar
+  let targetCalendarId = "primary";
+  if (calendarConnection.selected_calendar_ids?.length > 0) {
+    targetCalendarId = calendarConnection.selected_calendar_ids[0];
   }
 
   let accessToken = calendarConnection.access_token;
@@ -264,9 +269,11 @@ async function createGoogleCalendarEvent(
   // Build attendees list
   const attendees: { email: string; resource?: boolean }[] = [];
   
-  // Add host attorney as attendee
-  if (hostAttorney?.email) {
-    attendees.push({ email: hostAttorney.email });
+  // Add ALL internal participants as attendees
+  for (const email of participantEmails) {
+    if (email) {
+      attendees.push({ email });
+    }
   }
 
   // Add external attendees (client)
@@ -292,6 +299,9 @@ async function createGoogleCalendarEvent(
   if (meeting.location_mode === "InPerson" && meeting.rooms?.name) {
     descriptionParts.push(`Room: ${meeting.rooms.name}`);
   }
+  if (participantEmails.length > 1) {
+    descriptionParts.push(`Participants: ${participantEmails.join(", ")}`);
+  }
 
   const eventBody = {
     summary: eventSummary,
@@ -309,7 +319,7 @@ async function createGoogleCalendarEvent(
 
   console.log(`Creating Google Calendar event on calendar: ${targetCalendarId}`, JSON.stringify(eventBody));
 
-  // Use the admin-selected calendar ID instead of "primary"
+  // Use the host's calendar
   const calendarResponse = await fetch(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCalendarId)}/events?sendUpdates=all`,
     {
@@ -380,7 +390,7 @@ serve(async (req) => {
       });
     }
 
-    // 2. Fetch meeting details with relations (including lawmatics mapping fields)
+    // 2. Fetch meeting details with relations (including participant_user_ids)
     const { data: meeting, error: meetingError } = await supabase
       .from("meetings")
       .select(`
@@ -419,6 +429,20 @@ serve(async (req) => {
         .eq("id", meeting.host_attorney_user_id)
         .single();
       hostAttorney = attorney;
+    }
+
+    // Fetch ALL participant emails for Google Calendar attendees
+    const participantUserIds = meeting.participant_user_ids || [];
+    let participantEmails: string[] = [];
+    
+    if (participantUserIds.length > 0) {
+      const { data: participants } = await supabase
+        .from("users")
+        .select("email")
+        .in("id", participantUserIds);
+      
+      participantEmails = (participants || []).map(p => p.email).filter(Boolean);
+      console.log("Participant emails for Google Calendar:", participantEmails);
     }
 
     // 3. Update meeting with selected slot and set status to Booked
@@ -561,18 +585,18 @@ serve(async (req) => {
         .eq("id", meeting.id);
     }
 
-    // 8. ALWAYS create Google Calendar event on admin's selected calendar
-    // (if admin has a Google connection and meeting has created_by_user_id)
+    // 8. Create Google Calendar event with HOST as organizer and ALL participants as attendees
     let googleResult: { success: boolean; eventId?: string; error?: string } | null = null;
     let googleWarning: string | null = null;
 
-    if (meeting.created_by_user_id) {
-      console.log("Attempting Google Calendar event creation for admin user:", meeting.created_by_user_id, "on calendar:", meeting.google_calendar_id || "primary");
+    if (meeting.host_attorney_user_id) {
+      console.log("Attempting Google Calendar event creation for host:", meeting.host_attorney_user_id, "with participants:", participantEmails);
       
       googleResult = await createGoogleCalendarEvent(
         supabase,
         meeting as unknown as MeetingDetails,
         hostAttorney,
+        participantEmails,
         startDatetime,
         endDatetime
       );
@@ -595,7 +619,7 @@ serve(async (req) => {
         }
       }
     } else {
-      console.log("Skipping Google Calendar event - no created_by_user_id on meeting");
+      console.log("Skipping Google Calendar event - no host_attorney_user_id on meeting");
     }
 
     // Build warnings array for response
@@ -620,9 +644,9 @@ serve(async (req) => {
         lawmatics_location_id: meeting.rooms?.lawmatics_location_id || null,
         room_reservation_mode: roomReservationMode,
         google_event_id: googleResult?.eventId ?? null,
-        google_calendar_id: meeting.google_calendar_id ?? null,
         google_calendar_success: googleResult?.success ?? null,
         google_calendar_error: googleWarning,
+        participant_count: participantEmails.length,
       },
     });
 
