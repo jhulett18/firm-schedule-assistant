@@ -4,7 +4,7 @@ import {
   createOrRepairLawmaticsAppointment,
   resolveLawmaticsUserIdByEmail,
   lawmaticsFindOrCreateContact,
-  lawmaticsFindOrCreateMatter,
+  lawmaticsCreateMatter,
   pickString,
   pickNumber,
 } from "../_shared/lawmatics.ts";
@@ -798,16 +798,18 @@ serve(async (req) => {
             matterDescParts.push(`Lawmatics Appointment ID: ${lawmaticsAppointmentId}`);
           }
 
-          const matterResult = await lawmaticsFindOrCreateMatter(
+          const matterDescription = matterDescParts.join("\n");
+
+          const matterResult = await lawmaticsCreateMatter(
             accessToken,
             lawmaticsContactId,
-            { email: clientEmail, name: clientName },
-            matterTitle
+            matterTitle,
+            matterDescription
           );
 
           if (matterResult.matterIdStr) {
             lawmaticsMatterId = matterResult.matterIdStr;
-            console.log("Lawmatics matter resolved:", lawmaticsMatterId, matterResult.created ? "(created)" : "(existing)");
+            console.log("Lawmatics matter created:", lawmaticsMatterId);
             
             // Persist matter ID
             await supabase
