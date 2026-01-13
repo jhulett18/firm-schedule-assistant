@@ -510,6 +510,8 @@ serve(async (req) => {
     let lawmaticsMatterId: string | null = null;
     let contactWarning: string | null = null;
     let matterWarning: string | null = null;
+    let matterSkipped = false;
+    let matterSkipReason: string | null = null;
 
     if (lawmaticsConnection?.access_token) {
       const accessToken = lawmaticsConnection.access_token;
@@ -518,10 +520,12 @@ serve(async (req) => {
       const clientName = pickString(client?.name) || "Client";
       const clientPhone = pickString(client?.phone);
 
-      // Check idempotency - if matter already exists, skip
+      // Check idempotency - if matter already exists, skip ALL matter creation steps
       if (meeting.lawmatics_matter_id) {
-        console.log("Lawmatics matter already exists, skipping creation:", meeting.lawmatics_matter_id);
+        matterSkipped = true;
+        matterSkipReason = "Lawmatics matter already exists for this meeting; skipping creation.";
         lawmaticsMatterId = meeting.lawmatics_matter_id;
+        console.log("Lawmatics matter already exists, skipping creation:", meeting.lawmatics_matter_id);
       } else if (clientEmail) {
         // A) Find or create Lawmatics contact
         const tokens = clientName.split(/\s+/).filter(Boolean);
@@ -690,14 +694,27 @@ serve(async (req) => {
 
     console.log("Booking confirmed successfully for meeting:", meeting.id);
 
+    // Build response with matter skip info if applicable
+    const matterInfo = matterSkipped
+      ? { id: lawmaticsMatterId, skipped: true, reason: matterSkipReason }
+      : lawmaticsMatterId
+        ? { id: lawmaticsMatterId, skipped: false }
+        : null;
+
+    const responseMessage = matterSkipped
+      ? `Lawmatics matter already exists (ID: ${lawmaticsMatterId}). Skipped matter creation.`
+      : undefined;
+
     return new Response(JSON.stringify({ 
       success: true,
       meetingId: meeting.id,
       lawmaticsAppointmentId,
       lawmaticsContactId,
       lawmaticsMatterId,
+      matter: matterInfo,
       googleEventId: googleResult?.eventId ?? null,
       warnings: warnings.length > 0 ? warnings : undefined,
+      message: responseMessage,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
