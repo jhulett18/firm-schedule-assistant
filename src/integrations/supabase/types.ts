@@ -126,6 +126,8 @@ export type Database = {
           created_at: string
           expires_at: string
           id: string
+          lawmatics_existing_matter_id: string | null
+          lawmatics_matter_mode: string
           meeting_id: string
           public_token: string
           status: Database["public"]["Enums"]["booking_request_status"]
@@ -134,6 +136,8 @@ export type Database = {
           created_at?: string
           expires_at: string
           id?: string
+          lawmatics_existing_matter_id?: string | null
+          lawmatics_matter_mode?: string
           meeting_id: string
           public_token?: string
           status?: Database["public"]["Enums"]["booking_request_status"]
@@ -142,6 +146,8 @@ export type Database = {
           created_at?: string
           expires_at?: string
           id?: string
+          lawmatics_existing_matter_id?: string | null
+          lawmatics_matter_mode?: string
           meeting_id?: string
           public_token?: string
           status?: Database["public"]["Enums"]["booking_request_status"]

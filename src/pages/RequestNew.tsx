@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -29,6 +29,10 @@ import {
   ExternalLink,
   AlertCircle,
   Calendar,
+  Search,
+  RefreshCw,
+  Loader2,
+  Briefcase,
 } from "lucide-react";
 import { copyToClipboard, getBookingUrl, generateClientEmailTemplate } from "@/lib/clipboard";
 
@@ -50,6 +54,14 @@ interface CompanyMember {
   hasGoogleConnection: boolean;
 }
 
+interface LawmaticsMatter {
+  id: string;
+  title: string;
+  status: string | null;
+  practice_area: string | null;
+  updated_at: string | null;
+}
+
 interface FormData {
   clientName: string;
   clientEmail: string;
@@ -64,6 +76,9 @@ interface FormData {
   allowWeekends: boolean;
   timePreference: string;
   minNoticeHours: number;
+  // Matter attachment fields
+  lawmaticsMatterMode: "new" | "existing";
+  lawmaticsExistingMatterId: string;
 }
 
 const initialFormData: FormData = {
@@ -80,6 +95,8 @@ const initialFormData: FormData = {
   allowWeekends: false,
   timePreference: "None",
   minNoticeHours: 24,
+  lawmaticsMatterMode: "new",
+  lawmaticsExistingMatterId: "",
 };
 
 export default function RequestNew() {
@@ -90,6 +107,68 @@ export default function RequestNew() {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+
+  // Matter lookup state
+  const [existingMatters, setExistingMatters] = useState<LawmaticsMatter[]>([]);
+  const [matterLookupLoading, setMatterLookupLoading] = useState(false);
+  const [matterLookupError, setMatterLookupError] = useState<string | null>(null);
+  const [matterLookupDone, setMatterLookupDone] = useState(false);
+  const [lastLookedUpEmail, setLastLookedUpEmail] = useState<string>("");
+
+  // Debounced matter lookup
+  const lookupMatters = useCallback(async (email: string) => {
+    if (!email || !email.includes("@")) {
+      setExistingMatters([]);
+      setMatterLookupDone(false);
+      return;
+    }
+
+    setMatterLookupLoading(true);
+    setMatterLookupError(null);
+
+    try {
+      const { data, error } = await supabase.functions.invoke("lawmatics-find-matters-by-email", {
+        body: { email },
+      });
+
+      if (error) throw error;
+
+      if (data?.success) {
+        setExistingMatters(data.matters || []);
+        setLastLookedUpEmail(email);
+      } else {
+        setMatterLookupError(data?.error || "Failed to search for matters");
+        setExistingMatters([]);
+      }
+      setMatterLookupDone(true);
+    } catch (err) {
+      console.error("Matter lookup failed:", err);
+      setMatterLookupError(err instanceof Error ? err.message : "Failed to search for matters");
+      setExistingMatters([]);
+      setMatterLookupDone(true);
+    } finally {
+      setMatterLookupLoading(false);
+    }
+  }, []);
+
+  // Auto-lookup when email changes (debounced)
+  useEffect(() => {
+    const email = formData.clientEmail.trim();
+    if (!email || !email.includes("@") || email === lastLookedUpEmail) return;
+
+    const timeoutId = setTimeout(() => {
+      lookupMatters(email);
+    }, 800);
+
+    return () => clearTimeout(timeoutId);
+  }, [formData.clientEmail, lastLookedUpEmail, lookupMatters]);
+
+  // Reset matter selection when mode changes to 'new'
+  useEffect(() => {
+    if (formData.lawmaticsMatterMode === "new") {
+      setFormData(prev => ({ ...prev, lawmaticsExistingMatterId: "" }));
+    }
+  }, [formData.lawmaticsMatterMode]);
 
   // Fetch meeting types
   const { data: meetingTypes } = useQuery({
@@ -194,7 +273,7 @@ export default function RequestNew() {
         throw meetingError;
       }
 
-      // Create booking request
+      // Create booking request with matter attachment choice
       const expiresAt = addDays(new Date(), 7);
       const { data: bookingRequest, error: brError } = await supabase
         .from("booking_requests")
@@ -202,6 +281,10 @@ export default function RequestNew() {
           meeting_id: meeting.id,
           expires_at: expiresAt.toISOString(),
           status: "Open",
+          lawmatics_matter_mode: formData.lawmaticsMatterMode,
+          lawmatics_existing_matter_id: formData.lawmaticsMatterMode === "existing" && formData.lawmaticsExistingMatterId
+            ? formData.lawmaticsExistingMatterId
+            : null,
         })
         .select("id, public_token, meeting_id")
         .single();
@@ -236,6 +319,10 @@ export default function RequestNew() {
         if (!formData.clientEmail.trim()) newErrors.clientEmail = "Email is required";
         else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.clientEmail)) {
           newErrors.clientEmail = "Invalid email format";
+        }
+        // Validate matter selection if "existing" mode is chosen
+        if (formData.lawmaticsMatterMode === "existing" && !formData.lawmaticsExistingMatterId) {
+          newErrors.lawmaticsExistingMatterId = "Please select an existing matter";
         }
         break;
       case 1: // Meeting type
@@ -453,6 +540,129 @@ export default function RequestNew() {
                     onChange={(e) => updateForm({ clientPhone: e.target.value })}
                     placeholder="(555) 123-4567"
                   />
+                </div>
+
+                {/* Matter Attachment Section */}
+                <div className="border rounded-lg p-4 space-y-4 bg-muted/30">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="w-4 h-4 text-muted-foreground" />
+                      <Label className="font-medium">Lawmatics Matter Attachment</Label>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => lookupMatters(formData.clientEmail)}
+                      disabled={matterLookupLoading || !formData.clientEmail.includes("@")}
+                    >
+                      {matterLookupLoading ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Search className="w-4 h-4 mr-2" />
+                      )}
+                      Check for existing matter
+                    </Button>
+                  </div>
+
+                  <p className="text-sm text-muted-foreground">
+                    Choose whether to create a new matter or attach this booking to an existing one.
+                  </p>
+
+                  {matterLookupLoading && (
+                    <div className="flex items-center gap-2 py-2 text-muted-foreground">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="text-sm">Searching Lawmatics for existing matters...</span>
+                    </div>
+                  )}
+
+                  {matterLookupError && (
+                    <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30">
+                      <AlertCircle className="w-4 h-4 text-destructive mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-destructive">{matterLookupError}</p>
+                    </div>
+                  )}
+
+                  {matterLookupDone && !matterLookupLoading && (
+                    <>
+                      {existingMatters.length === 0 ? (
+                        <div className="flex items-center gap-2 p-3 rounded-md bg-muted border">
+                          <CheckCircle className="w-4 h-4 text-muted-foreground" />
+                          <span className="text-sm text-muted-foreground">
+                            No existing matters found for {lastLookedUpEmail}. A new matter will be created.
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary">{existingMatters.length} matter(s) found</Badge>
+                          </div>
+
+                          <RadioGroup
+                            value={formData.lawmaticsMatterMode}
+                            onValueChange={(v) => updateForm({ lawmaticsMatterMode: v as "new" | "existing" })}
+                            className="space-y-2"
+                          >
+                            <div className="flex items-center space-x-2 p-3 rounded-md border bg-background">
+                              <RadioGroupItem value="new" id="matter-new" />
+                              <Label htmlFor="matter-new" className="font-normal cursor-pointer flex-1">
+                                <span className="font-medium">Create new matter</span>
+                                <p className="text-sm text-muted-foreground mt-0.5">
+                                  A new matter will be created in Lawmatics for this booking.
+                                </p>
+                              </Label>
+                            </div>
+                            <div className="flex items-center space-x-2 p-3 rounded-md border bg-background">
+                              <RadioGroupItem value="existing" id="matter-existing" />
+                              <Label htmlFor="matter-existing" className="font-normal cursor-pointer flex-1">
+                                <span className="font-medium">Attach to existing matter</span>
+                                <p className="text-sm text-muted-foreground mt-0.5">
+                                  Select an existing matter to attach this booking to.
+                                </p>
+                              </Label>
+                            </div>
+                          </RadioGroup>
+
+                          {formData.lawmaticsMatterMode === "existing" && (
+                            <div className="ml-6">
+                              <Label className="text-sm">Select Matter *</Label>
+                              <Select
+                                value={formData.lawmaticsExistingMatterId}
+                                onValueChange={(v) => updateForm({ lawmaticsExistingMatterId: v })}
+                              >
+                                <SelectTrigger className={errors.lawmaticsExistingMatterId ? "border-destructive" : ""}>
+                                  <SelectValue placeholder="Choose a matter..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {existingMatters.map((matter) => (
+                                    <SelectItem key={matter.id} value={matter.id}>
+                                      <div className="flex flex-col">
+                                        <span>{matter.title}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                          ID: {matter.id}
+                                          {matter.status && ` • ${matter.status}`}
+                                          {matter.practice_area && ` • ${matter.practice_area}`}
+                                        </span>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              {errors.lawmaticsExistingMatterId && (
+                                <p className="text-sm text-destructive mt-1">{errors.lawmaticsExistingMatterId}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {!matterLookupDone && !matterLookupLoading && formData.clientEmail.includes("@") && (
+                    <p className="text-sm text-muted-foreground italic">
+                      Enter a client email and click "Check for existing matter" to search.
+                    </p>
+                  )}
                 </div>
               </>
             )}

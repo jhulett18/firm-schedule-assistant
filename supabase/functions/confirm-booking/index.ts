@@ -706,6 +706,10 @@ serve(async (req) => {
     let matterSkipped = false;
     let matterSkipReason: string | null = null;
 
+    // Get admin's matter attachment choice from booking request
+    const matterMode = bookingRequest.lawmatics_matter_mode || "new";
+    const existingMatterId = bookingRequest.lawmatics_existing_matter_id;
+
     if (lawmaticsConnection?.access_token) {
       const accessToken = lawmaticsConnection.access_token;
       const client = meeting.external_attendees?.[0];
@@ -713,12 +717,27 @@ serve(async (req) => {
       const clientName = pickString(client?.name) || "Client";
       const clientPhone = pickString(client?.phone);
 
-      // Check idempotency - if matter already exists, skip ALL matter creation steps
+      // Check idempotency - if matter already exists on meeting, skip ALL matter creation steps
       if (meeting.lawmatics_matter_id) {
         matterSkipped = true;
         matterSkipReason = "Lawmatics matter already exists for this meeting; skipping creation.";
         lawmaticsMatterId = meeting.lawmatics_matter_id;
         console.log("Lawmatics matter already exists, skipping creation:", meeting.lawmatics_matter_id);
+      } else if (matterMode === "existing" && existingMatterId) {
+        // Admin chose to attach to an existing matter
+        matterSkipped = true;
+        matterSkipReason = "Admin selected existing matter; attaching booking to it.";
+        lawmaticsMatterId = existingMatterId;
+        console.log("Using admin-selected existing matter:", existingMatterId);
+
+        // Persist the existing matter ID to meeting
+        await supabase
+          .from("meetings")
+          .update({ 
+            lawmatics_matter_id: existingMatterId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", meeting.id);
       } else if (clientEmail) {
         // A) Find or create Lawmatics contact
         const tokens = clientName.split(/\s+/).filter(Boolean);
