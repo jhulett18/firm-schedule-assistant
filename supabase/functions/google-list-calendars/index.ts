@@ -124,29 +124,13 @@ serve(async (req) => {
       });
     }
 
-    // Check if caller is admin
-    const { data: adminRole } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .eq("role", "admin")
-      .maybeSingle();
+    // STRICT USER SCOPING: Always use the caller's internal user ID
+    // Do NOT allow passing internalUserId to override - this prevents cross-account data leakage
+    const targetInternalUserId = callerUser.id;
 
-    const isAdmin = !!adminRole;
+    console.log("Loading Google connection for caller:", targetInternalUserId);
 
-    // Parse request body
-    const body = await req.json().catch(() => ({}));
-    let targetInternalUserId = body.internalUserId || callerUser.id;
-
-    // If requesting another user's data, must be admin
-    if (targetInternalUserId !== callerUser.id && !isAdmin) {
-      return new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Load calendar connection
+    // Load calendar connection for the CALLER ONLY
     const { data: connection, error: connError } = await supabase
       .from("calendar_connections")
       .select("*")
