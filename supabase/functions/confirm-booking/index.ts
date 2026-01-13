@@ -707,7 +707,7 @@ serve(async (req) => {
     let matterWarning: string | null = null;
     let matterSkipped = false;
     let matterSkipReason: string | null = null;
-    let matterAttempts: Array<{ endpoint: string; status: number; excerpt: string }> = [];
+    let matterAttempts: Array<{ endpoint: string; payload_shape: string; status: number; excerpt: string }> = [];
 
     // Get admin's matter attachment choice from booking request
     const matterMode = bookingRequest.lawmatics_matter_mode || "new";
@@ -718,25 +718,24 @@ serve(async (req) => {
       const client = meeting.external_attendees?.[0];
       const clientEmail = pickString(client?.email);
       const clientName = pickString(client?.name) || "Client";
-      const clientPhone = pickString(client?.phone);
 
       // Check idempotency - if matter already exists on meeting, skip ALL matter creation steps
       if (meeting.lawmatics_matter_id) {
         matterSkipped = true;
-        matterSkipReason = "Lawmatics matter already exists for this meeting; skipping creation.";
         lawmaticsMatterId = meeting.lawmatics_matter_id;
+        matterSkipReason = `Lawmatics matter already exists (ID: ${lawmaticsMatterId}). Skipped matter creation.`;
         console.log("Lawmatics matter already exists, skipping creation:", meeting.lawmatics_matter_id);
       } else if (matterMode === "existing" && existingMatterId) {
         // Admin chose to attach to an existing matter
         matterSkipped = true;
-        matterSkipReason = "Admin selected existing matter; attaching booking to it.";
         lawmaticsMatterId = existingMatterId;
+        matterSkipReason = `Admin selected existing Lawmatics matter (ID: ${lawmaticsMatterId}). Skipped new matter creation.`;
         console.log("Using admin-selected existing matter:", existingMatterId);
 
         // Persist the existing matter ID to meeting
         await supabase
           .from("meetings")
-          .update({ 
+          .update({
             lawmatics_matter_id: existingMatterId,
             updated_at: new Date().toISOString(),
           })
@@ -744,70 +743,62 @@ serve(async (req) => {
       } else if (clientEmail) {
         // A) Find or create Lawmatics contact
         const tokens = clientName.split(/\s+/).filter(Boolean);
+        const clientFirstName = tokens[0] || "Client";
+        const clientLastName = tokens.slice(1).join(" ") || "Booking";
+
         const contactResult = await lawmaticsFindOrCreateContact(accessToken, {
           email: clientEmail,
           name: clientName,
-          first_name: tokens[0] || "Client",
-          last_name: tokens.slice(1).join(" ") || "Booking",
+          first_name: clientFirstName,
+          last_name: clientLastName,
         });
 
         if (contactResult.contactIdStr) {
           lawmaticsContactId = contactResult.contactIdStr;
           lawmaticsContactCreated = contactResult.created;
-          console.log("Lawmatics contact resolved:", lawmaticsContactId, contactResult.created ? "(created)" : "(existing)");
-          
+          console.log(
+            "Lawmatics contact resolved:",
+            lawmaticsContactId,
+            contactResult.created ? "(created)" : "(existing)"
+          );
+
           // Persist contact ID immediately
           await supabase
             .from("meetings")
-            .update({ 
+            .update({
               lawmatics_contact_id: lawmaticsContactId,
               updated_at: new Date().toISOString(),
             })
             .eq("id", meeting.id);
 
-          // B) Create Lawmatics Matter (REQUIRED step - not optional)
-          const clientLastName = tokens.slice(1).join(" ") || tokens[0] || "Client";
-          const clientFirstName = tokens[0] || "Client";
+          // B) Create Lawmatics Matter (Prospect) (REQUIRED step - not optional)
           const meetingTypeName = meeting.meeting_types?.name || "Meeting";
           const matterTitle = `${clientLastName}, ${clientFirstName} - ${meetingTypeName}`;
 
-          // Build description with booking details
+          // Build notes with booking details
           const startParts = toLocalDateTimeParts(startDatetime, timezone);
           const endParts = toLocalDateTimeParts(endDatetime, timezone);
-          
+
           const matterDescParts = [
             `Meeting Type: ${meetingTypeName}`,
             `Scheduled: ${startParts.date} ${startParts.time} - ${endParts.time} (${timezone})`,
             `Duration: ${meeting.duration_minutes} minutes`,
-            `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || "In Person") : "Zoom"}`,
-          ];
-          
-          if (meeting.rooms?.name && meeting.location_mode === "InPerson") {
-            matterDescParts.push(`Room: ${meeting.rooms.name}`);
-          }
-          
-          if (hostAttorney) {
-            matterDescParts.push(`Host Attorney: ${hostAttorney.name} (${hostAttorney.email})`);
-          }
-          
-          if (participantEmails.length > 0) {
-            matterDescParts.push(`Participants: ${participantEmails.join(", ")}`);
-          }
-          
-          matterDescParts.push("");
-          matterDescParts.push("--- Traceability ---");
-          matterDescParts.push(`Booking Request ID: ${bookingRequest.id}`);
-          matterDescParts.push(`Meeting ID: ${meeting.id}`);
-          if (lawmaticsAppointmentId) {
-            matterDescParts.push(`Lawmatics Appointment ID: ${lawmaticsAppointmentId}`);
-          }
+            `Location: ${meeting.location_mode === "InPerson" ? meeting.rooms?.name || "In Person" : "Zoom"}`,
+            hostAttorney ? `Host Attorney: ${hostAttorney.name} (${hostAttorney.email})` : null,
+            participantEmails.length > 0 ? `Participants: ${participantEmails.join(", ")}` : null,
+            "",
+            "--- Traceability ---",
+            `Booking Request ID: ${bookingRequest.id}`,
+            `Meeting ID: ${meeting.id}`,
+            lawmaticsAppointmentId ? `Lawmatics Appointment ID: ${lawmaticsAppointmentId}` : null,
+          ].filter(Boolean);
 
           const matterDescription = matterDescParts.join("\n");
 
-          console.log("[Lawmatics] Creating matter for contact:", lawmaticsContactId, "with title:", matterTitle);
-          
+          console.log("[Lawmatics] Creating matter/prospect for:", clientEmail, "title:", matterTitle);
+
           const matterResult = await lawmaticsCreateMatter(accessToken, {
-            contactId: lawmaticsContactId,
+            contactId: lawmaticsContactId, // include explicit contact_id fallback
             email: clientEmail,
             firstName: clientFirstName,
             lastName: clientLastName,
@@ -815,34 +806,39 @@ serve(async (req) => {
             notes: matterDescription,
           });
 
-          // Capture attempt details for response
-          if (matterResult.attempts) {
-            matterAttempts = matterResult.attempts;
+          if (matterResult.attempts?.length) {
+            matterAttempts = matterResult.attempts.map((a) => ({
+              endpoint: a.endpoint,
+              payload_shape: a.payload_shape,
+              status: a.status,
+              excerpt: a.excerpt,
+            }));
           }
 
           if (matterResult.matterIdStr) {
             lawmaticsMatterId = matterResult.matterIdStr;
             lawmaticsMatterCreated = true;
             console.log("Lawmatics matter created:", lawmaticsMatterId);
-            
+
             // Persist matter ID
             await supabase
               .from("meetings")
-              .update({ 
+              .update({
                 lawmatics_matter_id: lawmaticsMatterId,
                 updated_at: new Date().toISOString(),
               })
               .eq("id", meeting.id);
           } else {
             // Matter creation FAILED - but non-blocking
-            const attemptDetails = matterAttempts.map(a => `${a.endpoint}(${a.status}): ${a.excerpt.slice(0,100)}`).join("; ");
-            matterWarning = `Matter creation failed: ${matterResult.error || "Unknown error"}. Attempts: ${attemptDetails}`;
-            console.warn("Lawmatics matter creation failed (non-blocking):", matterWarning);
-            
-            // Also include any warnings from the matter creation function
+            const attemptDetails = matterAttempts
+              .map((a) => `${a.endpoint}[${a.payload_shape}](${a.status}): ${a.excerpt.slice(0, 120)}`)
+              .join("; ");
+
+            matterWarning = `Matter/Prospect creation failed: ${matterResult.error || "Unknown error"}. Attempts: ${attemptDetails}`;
             if (matterResult.warnings?.length) {
               matterWarning += ` | Details: ${matterResult.warnings.join("; ")}`;
             }
+            console.warn("Lawmatics matter creation failed (non-blocking):", matterWarning);
           }
         } else {
           contactWarning = contactResult.error || "Failed to create Lawmatics contact";
@@ -858,8 +854,8 @@ serve(async (req) => {
     let googleWarnings: string[] = [];
 
     if (participants.length > 0) {
-      console.log("Creating Google Calendar events for all participants:", participants.map(p => p.email));
-      
+      console.log("Creating Google Calendar events for all participants:", participants.map((p) => p.email));
+
       const googleResponse = await createGoogleCalendarEventsForAllParticipants(
         supabase,
         meeting as unknown as MeetingDetails,
@@ -868,31 +864,42 @@ serve(async (req) => {
         startDatetime,
         endDatetime
       );
-      
+
       googleResults = googleResponse.results;
       googleWarnings = googleResponse.warnings;
-      
-      console.log("Google Calendar results:", googleResults.length, "total,", 
-        googleResults.filter(r => r.created).length, "created,",
-        googleResults.filter(r => r.skipped).length, "skipped");
+
+      console.log(
+        "Google Calendar results:",
+        googleResults.length,
+        "total,",
+        googleResults.filter((r) => r.created).length,
+        "created,",
+        googleResults.filter((r) => r.skipped).length,
+        "skipped"
+      );
     } else {
       console.log("Skipping Google Calendar events - no participants");
     }
 
     // Build warnings array for response
-    const warnings: { system: string; message: string; user_id?: string }[] = [];
-    
+    const warningsDetailed: { system: string; message: string; user_id?: string }[] = [];
+    const warnings: string[] = [];
+
     if (lawmaticsError && lawmaticsConnection) {
-      warnings.push({ system: "lawmatics_appointment", message: lawmaticsError });
+      warningsDetailed.push({ system: "lawmatics_appointment", message: lawmaticsError });
+      warnings.push(`[lawmatics_appointment] ${lawmaticsError}`);
     }
     if (contactWarning) {
-      warnings.push({ system: "lawmatics_contact", message: contactWarning });
+      warningsDetailed.push({ system: "lawmatics_contact", message: contactWarning });
+      warnings.push(`[lawmatics_contact] ${contactWarning}`);
     }
     if (matterWarning) {
-      warnings.push({ system: "lawmatics_matter", message: matterWarning });
+      warningsDetailed.push({ system: "lawmatics_matter", message: matterWarning });
+      warnings.push(`[lawmatics_matter] ${matterWarning}`);
     }
     for (const gw of googleWarnings) {
-      warnings.push({ system: "google", message: gw });
+      warningsDetailed.push({ system: "google", message: gw });
+      warnings.push(`[google] ${gw}`);
     }
 
     // 10. Log success audit
@@ -910,9 +917,9 @@ serve(async (req) => {
         lawmatics_event_type_id: meeting.meeting_types?.lawmatics_event_type_id || null,
         lawmatics_location_id: meeting.rooms?.lawmatics_location_id || null,
         room_reservation_mode: roomReservationMode,
-        google_events_created: googleResults.filter(r => r.created).length,
-        google_events_skipped: googleResults.filter(r => r.skipped).length,
-        google_events_failed: googleResults.filter(r => r.error && !r.skipped).length,
+        google_events_created: googleResults.filter((r) => r.created).length,
+        google_events_skipped: googleResults.filter((r) => r.skipped).length,
+        google_events_failed: googleResults.filter((r) => r.error && !r.skipped).length,
         participant_count: participants.length,
       },
     });
@@ -926,19 +933,17 @@ serve(async (req) => {
         ? { id: lawmaticsMatterId, skipped: false }
         : null;
 
-    const responseMessage = matterSkipped
-      ? `Lawmatics matter already exists (ID: ${lawmaticsMatterId}). Skipped matter creation.`
-      : undefined;
+    const responseMessage = matterSkipped ? matterSkipReason : undefined;
 
     // Build Google response object
     const googleInfo = {
       results: googleResults,
       summary: {
         total: googleResults.length,
-        created: googleResults.filter(r => r.created).length,
-        skipped: googleResults.filter(r => r.skipped).length,
-        failed: googleResults.filter(r => r.error && !r.skipped).length,
-      }
+        created: googleResults.filter((r) => r.created).length,
+        skipped: googleResults.filter((r) => r.skipped).length,
+        failed: googleResults.filter((r) => r.error && !r.skipped).length,
+      },
     };
 
     // Build Lawmatics appointment response object
@@ -954,41 +959,44 @@ serve(async (req) => {
         ? { error: lawmaticsAppointmentResult.error }
         : null;
 
-    // Build comprehensive Lawmatics response object (A.1 requirement)
+    // Build comprehensive Lawmatics response object
     const lawmaticsInfo = {
       contact_created: lawmaticsContactCreated,
       contact_id: lawmaticsContactId || undefined,
       matter_created: lawmaticsMatterCreated,
       matter_id: lawmaticsMatterId || undefined,
       matter_skipped: matterSkipped || undefined,
-      matter_skip_reason: matterSkipReason || undefined,
-      matter_attempts: matterAttempts.length > 0 ? matterAttempts : undefined,
-      message: matterSkipped 
-        ? `Lawmatics matter already exists (ID: ${lawmaticsMatterId}). Skipped matter creation.`
-        : lawmaticsMatterCreated 
+      message: matterSkipped
+        ? matterSkipReason
+        : lawmaticsMatterCreated
           ? `Lawmatics matter created (ID: ${lawmaticsMatterId}).`
-          : matterWarning 
+          : matterWarning
             ? `Matter creation failed: ${matterWarning}`
             : undefined,
+      matter_attempts: matterAttempts.length > 0 ? matterAttempts : undefined,
     };
 
-    return new Response(JSON.stringify({ 
-      success: true,
-      meetingId: meeting.id,
-      // Explicit lawmatics object with all details (A.1)
-      lawmatics: lawmaticsInfo,
-      // Legacy fields for backwards compatibility
-      lawmaticsAppointmentId,
-      lawmaticsAppointment: lawmaticsAppointmentInfo,
-      lawmaticsContactId,
-      lawmaticsMatterId,
-      matter: matterInfo,
-      google: googleInfo,
-      warnings: warnings.length > 0 ? warnings : undefined,
-      message: responseMessage,
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        meetingId: meeting.id,
+        lawmatics: lawmaticsInfo,
+        // Legacy fields for backwards compatibility
+        lawmaticsAppointmentId,
+        lawmaticsAppointment: lawmaticsAppointmentInfo,
+        lawmaticsContactId,
+        lawmaticsMatterId,
+        matter: matterInfo,
+        google: googleInfo,
+        // New warnings[] as requested (strings) + keep the structured version for existing UI
+        warnings: warnings.length > 0 ? warnings : undefined,
+        warningsDetailed: warningsDetailed.length > 0 ? warningsDetailed : undefined,
+        message: responseMessage,
+      }),
+      {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
   } catch (error) {
     console.error("Error in confirm-booking:", error);
     return new Response(JSON.stringify({ 

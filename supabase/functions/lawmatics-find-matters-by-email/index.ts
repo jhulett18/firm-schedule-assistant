@@ -60,97 +60,101 @@ async function lawmaticsJson(res: Response): Promise<{
 }
 
 /**
- * Fetch matters for a given contact ID with endpoint fallback.
- * Tries /v1/prospects first, then /v1/matters if 404.
+ * Fetch matters/prospects for a given contact ID with endpoint fallback.
+ * Tries the docs endpoint first: /v1/prospects?contact_id=...
+ * If 404, falls back to legacy: /v1/matters?contact_id=...
  */
 async function fetchMattersForContact(
   accessToken: string,
   contactId: string
-): Promise<{ matters: LawmaticsMatter[]; warnings: string[] }> {
+): Promise<{ matters: LawmaticsMatter[]; warnings: string[]; attempts: Array<{ endpoint: string; status: number; excerpt: string }> }> {
   const matters: LawmaticsMatter[] = [];
   const warnings: string[] = [];
-  
-  // ATTEMPT 1: Try /v1/prospects (preferred endpoint)
+  const attempts: Array<{ endpoint: string; status: number; excerpt: string }> = [];
+
+  // ATTEMPT 1: /v1/prospects (Matters/Prospects)
   try {
-    const url1 = `/v1/prospects?filter_by=contact_id&filter_on=${contactId}&fields=case_title,status,practice_area,updated_at&per_page=50`;
+    const url1 = `/v1/prospects?contact_id=${encodeURIComponent(contactId)}&per_page=50`;
     console.log("[Lawmatics] Fetching matters via /v1/prospects for contact:", contactId);
-    
+
     const res1 = await lawmaticsFetch(accessToken, "GET", url1);
     const result1 = await lawmaticsJson(res1);
-    
+    attempts.push({ endpoint: url1, status: result1.status, excerpt: result1.excerpt });
+
     if (result1.ok && result1.json) {
       const rawMatters: any[] = Array.isArray(result1.json?.data) ? result1.json.data : [];
-      
+
       for (const m of rawMatters) {
         const attrs = m?.attributes ?? m;
         const id = pickString(m?.id);
         if (!id) continue;
-        
+
         matters.push({
           id,
-          title: pickString(attrs?.case_title) || pickString(attrs?.name) || pickString(attrs?.title) || `Matter ${id}`,
+          title:
+            pickString(attrs?.case_title) ||
+            pickString(attrs?.title) ||
+            pickString(attrs?.name) ||
+            `Matter ${id}`,
           status: pickString(attrs?.status) || pickString(attrs?.stage),
           practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
           updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),
         });
       }
-      
-      console.log(`[Lawmatics] /v1/prospects returned ${matters.length} matters for contact ${contactId}`);
-      return { matters, warnings };
+
+      return { matters, warnings, attempts };
     }
-    
-    // If 404, try fallback
+
     if (result1.status === 404) {
       warnings.push("/v1/prospects returned 404, trying /v1/matters fallback");
-      console.log("[Lawmatics] /v1/prospects returned 404, trying /v1/matters fallback");
-    } else if (!result1.ok) {
+    } else {
       warnings.push(`/v1/prospects failed (${result1.status}): ${result1.excerpt}`);
-      console.warn("[Lawmatics] /v1/prospects failed:", result1.status, result1.excerpt);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`/v1/prospects exception: ${msg}`);
-    console.warn("[Lawmatics] /v1/prospects exception:", msg);
+    attempts.push({ endpoint: "/v1/prospects", status: 0, excerpt: msg });
   }
-  
-  // ATTEMPT 2: Fallback to /v1/matters
+
+  // ATTEMPT 2: /v1/matters fallback
   try {
-    const url2 = `/v1/matters?contact_id=${contactId}&per_page=50`;
+    const url2 = `/v1/matters?contact_id=${encodeURIComponent(contactId)}&per_page=50`;
     console.log("[Lawmatics] Fetching matters via /v1/matters fallback for contact:", contactId);
-    
+
     const res2 = await lawmaticsFetch(accessToken, "GET", url2);
     const result2 = await lawmaticsJson(res2);
-    
+    attempts.push({ endpoint: url2, status: result2.status, excerpt: result2.excerpt });
+
     if (result2.ok && result2.json) {
       const rawMatters: any[] = Array.isArray(result2.json?.data) ? result2.json.data : [];
-      const existingIds = new Set(matters.map(m => m.id));
-      
+
       for (const m of rawMatters) {
         const attrs = m?.attributes ?? m;
         const id = pickString(m?.id);
-        if (!id || existingIds.has(id)) continue;
-        
+        if (!id) continue;
+
         matters.push({
           id,
-          title: pickString(attrs?.name) || pickString(attrs?.case_title) || pickString(attrs?.title) || `Matter ${id}`,
+          title:
+            pickString(attrs?.case_title) ||
+            pickString(attrs?.title) ||
+            pickString(attrs?.name) ||
+            `Matter ${id}`,
           status: pickString(attrs?.status) || pickString(attrs?.stage),
           practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
           updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),
         });
       }
-      
-      console.log(`[Lawmatics] /v1/matters returned ${rawMatters.length} matters for contact ${contactId}`);
-    } else if (!result2.ok) {
-      warnings.push(`/v1/matters fallback failed (${result2.status}): ${result2.excerpt}`);
-      console.warn("[Lawmatics] /v1/matters fallback failed:", result2.status, result2.excerpt);
+    } else {
+      warnings.push(`/v1/matters failed (${result2.status}): ${result2.excerpt}`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`/v1/matters exception: ${msg}`);
-    console.warn("[Lawmatics] /v1/matters exception:", msg);
+    attempts.push({ endpoint: "/v1/matters", status: 0, excerpt: msg });
   }
-  
-  return { matters, warnings };
+
+  return { matters, warnings, attempts };
 }
 
 serve(async (req) => {
