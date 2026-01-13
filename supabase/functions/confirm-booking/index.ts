@@ -700,11 +700,14 @@ serve(async (req) => {
 
     // 8. Create Lawmatics Contact and Matter (NON-BLOCKING)
     let lawmaticsContactId: string | null = null;
+    let lawmaticsContactCreated = false;
     let lawmaticsMatterId: string | null = null;
+    let lawmaticsMatterCreated = false;
     let contactWarning: string | null = null;
     let matterWarning: string | null = null;
     let matterSkipped = false;
     let matterSkipReason: string | null = null;
+    let matterAttempts: Array<{ endpoint: string; status: number; excerpt: string }> = [];
 
     // Get admin's matter attachment choice from booking request
     const matterMode = bookingRequest.lawmatics_matter_mode || "new";
@@ -750,6 +753,7 @@ serve(async (req) => {
 
         if (contactResult.contactIdStr) {
           lawmaticsContactId = contactResult.contactIdStr;
+          lawmaticsContactCreated = contactResult.created;
           console.log("Lawmatics contact resolved:", lawmaticsContactId, contactResult.created ? "(created)" : "(existing)");
           
           // Persist contact ID immediately
@@ -761,7 +765,7 @@ serve(async (req) => {
             })
             .eq("id", meeting.id);
 
-          // B) Create Lawmatics Matter
+          // B) Create Lawmatics Matter (REQUIRED step - not optional)
           const clientLastName = tokens.slice(1).join(" ") || tokens[0] || "Client";
           const clientFirstName = tokens[0] || "Client";
           const meetingTypeName = meeting.meeting_types?.name || "Meeting";
@@ -800,6 +804,8 @@ serve(async (req) => {
 
           const matterDescription = matterDescParts.join("\n");
 
+          console.log("[Lawmatics] Creating matter for contact:", lawmaticsContactId, "with title:", matterTitle);
+          
           const matterResult = await lawmaticsCreateMatter(
             accessToken,
             lawmaticsContactId,
@@ -807,8 +813,14 @@ serve(async (req) => {
             matterDescription
           );
 
+          // Capture attempt details for response
+          if (matterResult.attempts) {
+            matterAttempts = matterResult.attempts;
+          }
+
           if (matterResult.matterIdStr) {
             lawmaticsMatterId = matterResult.matterIdStr;
+            lawmaticsMatterCreated = true;
             console.log("Lawmatics matter created:", lawmaticsMatterId);
             
             // Persist matter ID
@@ -820,8 +832,15 @@ serve(async (req) => {
               })
               .eq("id", meeting.id);
           } else {
-            matterWarning = matterResult.error || "Failed to create Lawmatics matter";
+            // Matter creation FAILED - but non-blocking
+            const attemptDetails = matterAttempts.map(a => `${a.endpoint}(${a.status}): ${a.excerpt.slice(0,100)}`).join("; ");
+            matterWarning = `Matter creation failed: ${matterResult.error || "Unknown error"}. Attempts: ${attemptDetails}`;
             console.warn("Lawmatics matter creation failed (non-blocking):", matterWarning);
+            
+            // Also include any warnings from the matter creation function
+            if (matterResult.warnings?.length) {
+              matterWarning += ` | Details: ${matterResult.warnings.join("; ")}`;
+            }
           }
         } else {
           contactWarning = contactResult.error || "Failed to create Lawmatics contact";
@@ -933,9 +952,30 @@ serve(async (req) => {
         ? { error: lawmaticsAppointmentResult.error }
         : null;
 
+    // Build comprehensive Lawmatics response object (A.1 requirement)
+    const lawmaticsInfo = {
+      contact_created: lawmaticsContactCreated,
+      contact_id: lawmaticsContactId || undefined,
+      matter_created: lawmaticsMatterCreated,
+      matter_id: lawmaticsMatterId || undefined,
+      matter_skipped: matterSkipped || undefined,
+      matter_skip_reason: matterSkipReason || undefined,
+      matter_attempts: matterAttempts.length > 0 ? matterAttempts : undefined,
+      message: matterSkipped 
+        ? `Lawmatics matter already exists (ID: ${lawmaticsMatterId}). Skipped matter creation.`
+        : lawmaticsMatterCreated 
+          ? `Lawmatics matter created (ID: ${lawmaticsMatterId}).`
+          : matterWarning 
+            ? `Matter creation failed: ${matterWarning}`
+            : undefined,
+    };
+
     return new Response(JSON.stringify({ 
       success: true,
       meetingId: meeting.id,
+      // Explicit lawmatics object with all details (A.1)
+      lawmatics: lawmaticsInfo,
+      // Legacy fields for backwards compatibility
       lawmaticsAppointmentId,
       lawmaticsAppointment: lawmaticsAppointmentInfo,
       lawmaticsContactId,
