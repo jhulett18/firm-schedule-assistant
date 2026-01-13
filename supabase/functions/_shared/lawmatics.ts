@@ -1092,6 +1092,11 @@ export async function createOrRepairLawmaticsAppointment(
     contact_id: params.contactId,
   });
 
+  const eventTypeId = pickNumber(params.eventTypeId);
+  const locationId = pickNumber(params.locationId);
+  const userId = pickNumber(params.userId);
+  const contactId = pickNumber(params.contactId);
+
   // Build the event payload
   const payload: Record<string, any> = {
     name: params.name,
@@ -1102,10 +1107,17 @@ export async function createOrRepairLawmaticsAppointment(
     time_zone: params.timezone,
   };
 
-  if (params.eventTypeId) payload.event_type_id = params.eventTypeId;
-  if (params.locationId) payload.location_id = params.locationId;
-  if (params.userId) payload.user_id = params.userId;
-  if (params.contactId) payload.contact_id = params.contactId;
+  if (eventTypeId) payload.event_type_id = eventTypeId;
+  if (locationId) payload.location_id = locationId;
+  if (userId) {
+    payload.user_id = userId;
+    payload.user_ids = [userId];
+  }
+  if (contactId) {
+    payload.contact_id = contactId;
+    payload.eventable_type = "Contact";
+    payload.eventable_id = contactId;
+  }
 
   try {
     // Create
