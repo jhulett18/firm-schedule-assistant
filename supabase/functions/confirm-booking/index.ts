@@ -786,7 +786,7 @@ serve(async (req) => {
                   eventTypeId: pickNumber(meeting.meeting_types?.lawmatics_event_type_id),
                   locationId: meeting.location_mode === "InPerson" ? pickNumber(meeting.rooms?.lawmatics_location_id) : null,
                   userId: host.userId,
-                  contactId: lawmaticsContactId,
+                  contactId: lawmaticsContactId ? parseInt(lawmaticsContactId, 10) : null,
                   requiresLocation: meeting.location_mode === "InPerson",
                 },
                 async (step, level, message, details) => {
@@ -801,7 +801,6 @@ serve(async (req) => {
                 endpoint: lastAttempt?.endpoint || "/v1/events",
                 status: lastAttempt?.status || 0,
                 id: appointment.createdId || undefined,
-                contact_id: lawmaticsContactId || undefined,
                 body_excerpt: lastAttempt?.body_excerpt || appointment.error || undefined,
               };
 
