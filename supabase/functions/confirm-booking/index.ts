@@ -5,6 +5,7 @@ import {
   resolveLawmaticsUserIdByEmail,
   lawmaticsFindOrCreateContact,
   lawmaticsCreateMatter,
+  lawmaticsUpdateEvent,
   pickString,
   pickNumber,
 } from "../_shared/lawmatics.ts";
@@ -606,6 +607,14 @@ serve(async (req) => {
         fields_included?: string[];
       }>;
       event: { attempted: boolean; endpoint: string; status: number; id?: string; body_excerpt?: string };
+      matter_to_event_link?: { 
+        attempted: boolean; 
+        event_id: string; 
+        matter_id: string; 
+        status: number; 
+        ok: boolean; 
+        excerpt: string; 
+      };
       timestamp?: string;
     } = {
       contact: { attempted: false, endpoint: "", status: 0 },
@@ -896,6 +905,37 @@ serve(async (req) => {
                     .from("meetings")
                     .update({ lawmatics_matter_id: lawmaticsMatterId })
                     .eq("id", meeting.id);
+
+                  // Link the matter to the previously created event
+                  if (lawmaticsAppointmentId) {
+                    console.log(`[Lawmatics] Linking matter ${lawmaticsMatterId} to event ${lawmaticsAppointmentId}`);
+                    const linkMatterResult = await lawmaticsUpdateEvent(
+                      accessToken,
+                      lawmaticsAppointmentId,
+                      "PATCH",
+                      {
+                        matter_id: parseInt(lawmaticsMatterId, 10),
+                        eventable_type: "Matter",
+                        eventable_id: parseInt(lawmaticsMatterId, 10),
+                      }
+                    );
+
+                    lawmatics_debug.matter_to_event_link = {
+                      attempted: true,
+                      event_id: lawmaticsAppointmentId,
+                      matter_id: lawmaticsMatterId,
+                      status: linkMatterResult.status,
+                      ok: linkMatterResult.ok,
+                      excerpt: linkMatterResult.excerpt,
+                    };
+
+                    if (linkMatterResult.ok) {
+                      console.log(`[Lawmatics] Successfully linked matter ${lawmaticsMatterId} to event ${lawmaticsAppointmentId}`);
+                    } else {
+                      console.warn(`[Lawmatics] Failed to link matter to event: ${linkMatterResult.excerpt}`);
+                      response.warnings!.push(`[lawmatics_link_matter] Failed to link matter to event: ${linkMatterResult.excerpt}`);
+                    }
+                  }
                 } else if (matterResult.warnings?.length) {
                   response.warnings!.push(`[lawmatics_matter] ${matterResult.warnings.join("; ")}`);
                 }
