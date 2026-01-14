@@ -1032,6 +1032,31 @@ export function toLocalDateTimePartsWithSeconds(
   return { date: parts.date, time: parts.time, timeSeconds: parts.timeSeconds };
 }
 
+/**
+ * Convert UTC ISO datetime to ISO string with timezone offset (for Lawmatics API)
+ * Example: "2026-01-19T21:00:00.000Z" → "2026-01-19T16:00:00-05:00" (EST)
+ */
+export function toISOWithOffset(isoDatetime: string, timezone: string): string {
+  const date = new Date(isoDatetime);
+
+  // Get the date/time parts in the target timezone
+  const parts = toLocalDateTimeParts(isoDatetime, timezone);
+
+  // Calculate timezone offset in minutes
+  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const tzDate = new Date(date.toLocaleString('en-US', { timeZone: timezone }));
+  const offsetMinutes = (utcDate.getTime() - tzDate.getTime()) / (1000 * 60);
+
+  // Format offset as +HH:MM or -HH:MM
+  const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
+  const offsetMins = Math.abs(offsetMinutes) % 60;
+  const offsetSign = offsetMinutes <= 0 ? '+' : '-';
+  const offsetStr = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`;
+
+  // Return ISO format with offset: YYYY-MM-DDTHH:mm:ss+HH:MM
+  return `${parts.date}T${parts.timeSeconds}${offsetStr}`;
+}
+
 // ========== APPOINTMENT CREATION/REPAIR ==========
 
 export interface AppointmentParams {
@@ -1102,14 +1127,20 @@ export async function createOrRepairLawmaticsAppointment(
   const contactId = pickNumber(params.contactId);
 
   // Build the event payload per Lawmatics docs
+  // Convert UTC timestamps to ISO format with timezone offset (e.g., "2026-01-19T16:00:00-05:00")
+  const start_date_with_offset = toISOWithOffset(params.startDatetime, params.timezone);
+  const end_date_with_offset = toISOWithOffset(params.endDatetime, params.timezone);
+
+  console.log(`[LAWMATICS TZ DEBUG] Converted ${params.startDatetime} → ${start_date_with_offset}`);
+
   const payload: Record<string, any> = {
     name: params.name,
     description: params.description || "",
     all_day: false,
 
     // Lawmatics expects start_date/end_date as ISO timestamps with timezone offset
-    start_date: params.startDatetime,
-    end_date: params.endDatetime,
+    start_date: start_date_with_offset,
+    end_date: end_date_with_offset,
     time_zone: params.timezone,
   };
 
