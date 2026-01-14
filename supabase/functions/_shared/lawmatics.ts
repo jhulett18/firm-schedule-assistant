@@ -1101,17 +1101,15 @@ export async function createOrRepairLawmaticsAppointment(
   const userId = pickNumber(params.userId);
   const contactId = pickNumber(params.contactId);
 
-  // Build the event payload
-  // ONLY use starts_at/ends_at - don't send separate date/time fields
-  // Lawmatics interprets them incorrectly and shows wrong times
+  // Build the event payload per Lawmatics docs
   const payload: Record<string, any> = {
     name: params.name,
     description: params.description || "",
     all_day: false,
 
-    // ISO timestamps with timezone
-    starts_at: params.startDatetime,
-    ends_at: params.endDatetime,
+    // Lawmatics expects start_date/end_date as ISO timestamps with timezone offset
+    start_date: params.startDatetime,
+    end_date: params.endDatetime,
     time_zone: params.timezone,
   };
 
