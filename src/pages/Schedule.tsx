@@ -1,19 +1,18 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Calendar, Clock, MapPin, Video, CheckCircle, RefreshCw, AlertTriangle } from "lucide-react";
+import { Calendar, Clock, MapPin, Video, CheckCircle, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { LoadingState } from "@/components/public-booking/LoadingState";
-import { GuidedHelpPanel } from "@/components/public-booking/GuidedHelpPanel";
-import { NoAvailableTimesState } from "@/components/public-booking/NoAvailableTimesState";
 import { ExpiredOrCancelledState } from "@/components/public-booking/ExpiredOrCancelledState";
 import { ErrorState } from "@/components/public-booking/ErrorState";
 import { TimezoneSelector } from "@/components/public-booking/TimezoneSelector";
 import { ApiDebugButton, type ApiCall } from "@/components/public-booking/ApiDebugPanel";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ScheduleCalendarPicker } from "@/components/public-booking/ScheduleCalendarPicker";
 
 const ACTIVE_BOOKING_TOKEN_KEY = 'ACTIVE_BOOKING_TOKEN';
 
@@ -50,7 +49,6 @@ interface ContactSettings {
 export default function Schedule() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const slotSectionRef = useRef<HTMLDivElement>(null);
   
   const [currentState, setCurrentState] = useState<ScheduleState>("loading");
   const [errorMessage, setErrorMessage] = useState<string>("Something went wrong");
@@ -215,10 +213,6 @@ export default function Schedule() {
     setToken(storedToken);
     fetchBookingInfo(storedToken);
   }, [fetchBookingInfo, navigate]);
-
-  const scrollToSlots = () => {
-    slotSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
 
   const handleRetry = async () => {
     if (!token) return;
@@ -468,158 +462,36 @@ export default function Schedule() {
     );
   }
 
-  if (currentState === "no_available_times") {
-    return (
-      <div className="min-h-screen bg-background py-8 px-4">
-        <div className="max-w-lg mx-auto space-y-6">
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-foreground">Schedule Your Meeting</h1>
-            <p className="text-muted-foreground mt-1">
-              {meeting?.meetingTypeName || "Meeting"} • {meeting?.durationMinutes} minutes
-            </p>
-          </div>
-          
-          <NoAvailableTimesState
-            onTryPreviousWeek={() => {}}
-            onTryNextWeek={() => {}}
-            onRefresh={handleRefreshSlots}
-            canGoPrevious={false}
-            canGoNext={true}
-            isRefreshing={isLoadingSlots}
-            contactEmail={contact.email}
-            contactPhone={contact.phone}
-            contactMessage={contact.message}
-          />
-          
-          {/* Debug button */}
-          {apiCalls.length > 0 && (
-            <div className="flex justify-center">
-              <ApiDebugButton calls={apiCalls} />
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // Main scheduling view (needs_scheduling state)
+  // Main scheduling view - includes both needs_scheduling and no_available_times states
+  // The ScheduleCalendarPicker handles the empty state internally
   return (
     <div className="min-h-screen bg-background py-8 px-4">
-      <div className="max-w-lg mx-auto space-y-6">
-        {/* Header */}
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-foreground">Schedule Your Meeting</h1>
-          <p className="text-muted-foreground mt-1">Select a time that works best for you</p>
-        </div>
-
-        {/* Guided Help Panel */}
-        <GuidedHelpPanel
-          onGetStarted={scrollToSlots}
-          clientTimezone={clientTimezone}
-          contactEmail={contact.email}
-          contactPhone={contact.phone}
-        />
-
-        {/* Meeting Summary */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg">
-              {meeting?.meetingTypeName || "Meeting"}
-            </CardTitle>
-            <CardDescription>Meeting Details</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center gap-3 text-sm">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <span>{meeting?.durationMinutes} minutes</span>
-            </div>
-            <div className="flex items-center gap-3 text-sm">
-              {meeting?.locationMode === "Zoom" ? (
-                <Video className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <MapPin className="h-4 w-4 text-muted-foreground" />
-              )}
-              <span>{getLocationDisplay()}</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Timezone Selector */}
-        <div className="flex justify-center">
+      <div className="max-w-2xl mx-auto space-y-6">
+        {/* Compact Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-foreground">
+              {meeting?.meetingTypeName || "Schedule Your Meeting"}
+            </h1>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {meeting?.durationMinutes} min • {meeting?.locationMode === "Zoom" ? "Video call" : "In-person"}
+            </p>
+          </div>
           <TimezoneSelector 
             timezone={clientTimezone} 
             onTimezoneChange={setClientTimezone} 
           />
         </div>
 
-        {/* Available Slots */}
-        <Card ref={slotSectionRef}>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Calendar className="h-5 w-5" />
-                  Available Times
-                </CardTitle>
-                <CardDescription>Choose a time slot below</CardDescription>
-              </div>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => token && fetchAvailableSlots(token)}
-                disabled={isLoadingSlots}
-              >
-                <RefreshCw className={`h-4 w-4 ${isLoadingSlots ? 'animate-spin' : ''}`} />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {isLoadingSlots ? (
-              <div className="space-y-2">
-                {[1, 2, 3].map(i => (
-                  <div key={i} className="h-16 bg-muted animate-pulse rounded-md" />
-                ))}
-              </div>
-            ) : availableSlots.length > 0 ? (
-              <div className="space-y-2">
-                {availableSlots.map((slot, index) => (
-                  <Button
-                    key={index}
-                    variant={selectedSlot?.start === slot.start ? "default" : "outline"}
-                    className="w-full justify-start text-left h-auto py-3"
-                    onClick={() => setSelectedSlot(slot)}
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <div>
-                        <div className="font-medium">
-                          {format(new Date(slot.start), "EEEE, MMMM d")}
-                        </div>
-                        <div className="text-sm opacity-80">
-                          {format(new Date(slot.start), "h:mm a")}
-                        </div>
-                      </div>
-                      {selectedSlot?.start === slot.start && (
-                        <CheckCircle className="h-5 w-5" />
-                      )}
-                    </div>
-                  </Button>
-                ))}
-              </div>
-            ) : (
-              <NoAvailableTimesState
-                onTryPreviousWeek={() => {}}
-                onTryNextWeek={() => {}}
-                onRefresh={handleRefreshSlots}
-                canGoPrevious={false}
-                canGoNext={true}
-                isRefreshing={isLoadingSlots}
-                contactEmail={contact.email}
-                contactPhone={contact.phone}
-                contactMessage={contact.message}
-              />
-            )}
-          </CardContent>
-        </Card>
+        {/* Calendar + Times Picker */}
+        <ScheduleCalendarPicker
+          slots={availableSlots}
+          selectedSlot={selectedSlot}
+          onSelectSlot={setSelectedSlot}
+          clientTimezone={clientTimezone}
+          isLoading={isLoadingSlots}
+          onRefresh={() => token && fetchAvailableSlots(token)}
+        />
 
         {/* Confirm Button */}
         {selectedSlot && (
