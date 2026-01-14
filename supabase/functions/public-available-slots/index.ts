@@ -222,16 +222,18 @@ function suggestSlots(
             if (currentSlotStart >= minimumNoticeTime) {
               const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
 
-              // Format label for client display
+              // Format label for client display in Eastern timezone
               const dayLabel = currentSlotStart.toLocaleDateString("en-US", {
                 weekday: "long",
                 month: "short",
                 day: "numeric",
+                timeZone: "America/New_York",
               });
               const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
                 hour: "numeric",
                 minute: "2-digit",
                 hour12: true,
+                timeZone: "America/New_York",
               });
 
               slots.push({
@@ -264,11 +266,13 @@ function suggestSlots(
               weekday: "long",
               month: "short",
               day: "numeric",
+              timeZone: "America/New_York",
             });
             const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
               hour: "numeric",
               minute: "2-digit",
               hour12: true,
+              timeZone: "America/New_York",
             });
 
             slots.push({

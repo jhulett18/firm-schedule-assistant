@@ -195,11 +195,13 @@ function suggestSlots(
                 weekday: "long",
                 month: "short",
                 day: "numeric",
+                timeZone: "America/New_York",
               });
               const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
                 hour: "numeric",
                 minute: "2-digit",
                 hour12: true,
+                timeZone: "America/New_York",
               });
 
               slots.push({
@@ -230,11 +232,13 @@ function suggestSlots(
               weekday: "long",
               month: "short",
               day: "numeric",
+              timeZone: "America/New_York",
             });
             const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
               hour: "numeric",
               minute: "2-digit",
               hour12: true,
+              timeZone: "America/New_York",
             });
 
             slots.push({
