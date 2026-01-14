@@ -137,36 +137,36 @@ export function ScheduleCalendarPicker({
       <CardContent className="p-0">
         <div className="flex flex-col md:flex-row">
           {/* Calendar (Left Side) */}
-          <div className="p-4 md:p-6 md:border-r border-border flex-shrink-0">
+        <div className="p-5 md:p-6 md:border-r border-border flex-shrink-0">
             {/* Month Navigation */}
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-5">
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={goToPreviousMonth}
-                className="h-8 w-8"
+                className="h-9 w-9"
               >
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeft className="h-5 w-5" />
               </Button>
-              <h3 className="text-sm font-semibold text-foreground">
+              <h3 className="text-base font-semibold text-foreground">
                 {format(displayedMonth, "MMMM yyyy")}
               </h3>
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={goToNextMonth}
-                className="h-8 w-8"
+                className="h-9 w-9"
               >
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRight className="h-5 w-5" />
               </Button>
             </div>
 
             {/* Weekday Headers */}
-            <div className="grid grid-cols-7 gap-1 mb-2">
+            <div className="grid grid-cols-7 gap-1 mb-3">
               {WEEKDAY_LABELS.map(day => (
                 <div
                   key={day}
-                  className="text-center text-xs font-medium text-muted-foreground py-1"
+                  className="text-center text-sm font-medium text-muted-foreground py-1.5 w-11"
                 >
                   {day}
                 </div>
@@ -189,7 +189,7 @@ export function ScheduleCalendarPicker({
                     disabled={!isAvailable}
                     onClick={() => handleDateClick(day)}
                     className={cn(
-                      "h-9 w-9 text-sm rounded-md transition-colors relative",
+                      "h-11 w-11 text-sm rounded-lg transition-colors relative",
                       "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                       !isCurrentMonth && "text-muted-foreground/40",
                       isCurrentMonth && !isAvailable && "text-muted-foreground/50",
@@ -201,7 +201,7 @@ export function ScheduleCalendarPicker({
                     {format(day, "d")}
                     {/* Availability dot */}
                     {isAvailable && !isSelected && (
-                      <span className="absolute bottom-1 left-1/2 -translate-x-1/2 h-1 w-1 rounded-full bg-primary" />
+                      <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-primary" />
                     )}
                   </button>
                 );
