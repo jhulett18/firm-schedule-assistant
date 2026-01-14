@@ -123,14 +123,15 @@ async function getBusyIntervalsForCalendar(
 
 // Helper to create a Date object representing a specific local time in a timezone
 function createDateInTimezone(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
-  // Create an ISO string without timezone
-  const isoString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+  // Create a date string that will be parsed differently in different locales
+  // We'll use this to find the offset
+  const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
 
-  // Create a reference date in UTC
-  const utcDate = new Date(isoString + 'Z');
+  // Parse as UTC first
+  const utc = new Date(dateStr + 'Z');
 
-  // Format to see what this UTC time looks like in the target timezone
-  const formatter = new Intl.DateTimeFormat('en-CA', {
+  // Get the formatter for the target timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     year: 'numeric',
     month: '2-digit',
@@ -141,25 +142,29 @@ function createDateInTimezone(year: number, month: number, day: number, hour: nu
     hour12: false
   });
 
-  const parts = formatter.formatToParts(utcDate);
-  const tzYear = Number(parts.find(p => p.type === 'year')!.value);
-  const tzMonth = Number(parts.find(p => p.type === 'month')!.value);
-  const tzDay = Number(parts.find(p => p.type === 'day')!.value);
-  const tzHour = Number(parts.find(p => p.type === 'hour')!.value);
-  const tzMinute = Number(parts.find(p => p.type === 'minute')!.value);
-  const tzSecond = Number(parts.find(p => p.type === 'second')!.value);
+  // Format the UTC time to see what it looks like in the target timezone
+  const parts = formatter.formatToParts(utc);
+  const partsObj: Record<string, string> = {};
+  parts.forEach(p => { if (p.type !== 'literal') partsObj[p.type] = p.value; });
 
-  // Calculate the offset between what we wanted and what we got
-  const offset =
-    (year - tzYear) * 365 * 24 * 60 * 60 * 1000 +
-    (month - tzMonth) * 30 * 24 * 60 * 60 * 1000 +
-    (day - tzDay) * 24 * 60 * 60 * 1000 +
-    (hour - tzHour) * 60 * 60 * 1000 +
-    (minute - tzMinute) * 60 * 1000 +
-    (0 - tzSecond) * 1000;
+  // Calculate what we got vs what we wanted
+  const gotYear = parseInt(partsObj.year);
+  const gotMonth = parseInt(partsObj.month);
+  const gotDay = parseInt(partsObj.day);
+  const gotHour = parseInt(partsObj.hour);
+  const gotMinute = parseInt(partsObj.minute);
 
-  // Return the UTC date adjusted by the offset
-  return new Date(utcDate.getTime() + offset);
+  // Calculate the hour difference (the main offset component)
+  let hourDiff = hour - gotHour;
+  let dayDiff = day - gotDay;
+
+  // Handle day boundary crossings
+  if (dayDiff !== 0) {
+    hourDiff += dayDiff * 24;
+  }
+
+  // Apply the offset
+  return new Date(utc.getTime() + hourDiff * 60 * 60 * 1000 + (minute - gotMinute) * 60 * 1000);
 }
 
 function suggestSlots(
