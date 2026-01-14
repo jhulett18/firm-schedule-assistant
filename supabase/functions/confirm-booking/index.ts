@@ -758,88 +758,7 @@ serve(async (req) => {
             }
           }
 
-          // --- Lawmatics Event/Appointment ---
-          if (!meeting.lawmatics_appointment_id) {
-            try {
-              await writeLog(supabase, meeting.id, runId, "lawmatics_resolve_user_start", "info", "Resolving Lawmatics owner", {});
-
-              const host = await resolveLawmaticsUserIdByEmail(accessToken, hostAttorney?.email || null);
-              const effectiveTimezone = host.timezone || meeting.timezone || "America/New_York";
-
-              // Resolve all participant Lawmatics user IDs
-              const resolvedParticipantLawmaticsIds: number[] = [];
-              for (const participant of participants) {
-                const resolved = await resolveLawmaticsUserIdByEmail(accessToken, participant.email);
-                if (resolved.userId) {
-                  resolvedParticipantLawmaticsIds.push(resolved.userId);
-                }
-              }
-
-              const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
-              const descriptionParts = [
-                `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
-                `Duration: ${meeting.duration_minutes} minutes`,
-                `Location: ${meeting.location_mode === "InPerson" ? meeting.rooms?.name || "In Person" : "Zoom"}`,
-                hostAttorney ? `Host Attorney: ${hostAttorney.name}` : null,
-                client?.email ? `Client Email: ${client.email}` : null,
-              ].filter(Boolean).join("\n");
-
-              const appointment = await createOrRepairLawmaticsAppointment(
-                accessToken,
-                {
-                  name: eventName,
-                  description: descriptionParts,
-                  startDatetime,
-                  endDatetime,
-                  timezone: effectiveTimezone,
-                  eventTypeId: pickNumber(meeting.meeting_types?.lawmatics_event_type_id),
-                  locationId: meeting.location_mode === "InPerson" ? pickNumber(meeting.rooms?.lawmatics_location_id) : null,
-                  userId: host.userId,
-                  contactId: lawmaticsContactId ? parseInt(lawmaticsContactId, 10) : null,
-                  requiresLocation: meeting.location_mode === "InPerson",
-                },
-                async (step, level, message, details) => {
-                  await writeLog(supabase, meeting.id, runId, step, level, message, details || {});
-                }
-              );
-
-              // Populate debug info
-              const lastAttempt = (appointment.attempts || [])[(appointment.attempts || []).length - 1];
-              lawmatics_debug.event = {
-                attempted: true,
-                endpoint: lastAttempt?.endpoint || "/v1/events",
-                status: lastAttempt?.status || 0,
-                id: appointment.createdId || undefined,
-                body_excerpt: lastAttempt?.body_excerpt || appointment.error || undefined,
-              };
-
-              if (appointment.createdId) {
-                lawmaticsAppointmentId = appointment.createdId;
-                await supabase
-                  .from("meetings")
-                  .update({ lawmatics_appointment_id: lawmaticsAppointmentId })
-                  .eq("id", meeting.id);
-              } else if (appointment.error) {
-                response.warnings!.push(`[lawmatics_event] ${appointment.error}`);
-              }
-            } catch (eventErr) {
-              const errMsg = eventErr instanceof Error ? eventErr.message : String(eventErr);
-              console.error("Lawmatics event error (non-blocking):", errMsg);
-              response.warnings!.push(`[lawmatics_event] ${errMsg}`);
-              lawmatics_debug.event = { attempted: true, endpoint: "/v1/events", status: 0, body_excerpt: errMsg };
-            }
-          } else {
-            lawmaticsAppointmentId = meeting.lawmatics_appointment_id;
-            lawmatics_debug.event = {
-              attempted: false,
-              endpoint: "/v1/events",
-              status: 0,
-              id: lawmaticsAppointmentId || undefined,
-              body_excerpt: "skipped (already exists)",
-            };
-          }
-
-          // --- Lawmatics Contact & Matter ---
+          // --- Lawmatics Matter (create BEFORE event so we can link event to matter) ---
           if (!meeting.lawmatics_matter_id && matterMode !== "existing" && clientEmail) {
             try {
               if (!lawmaticsContactId) {
@@ -905,45 +824,14 @@ serve(async (req) => {
                     .from("meetings")
                     .update({ lawmatics_matter_id: lawmaticsMatterId })
                     .eq("id", meeting.id);
-
-                  // Link the matter to the previously created event
-                  if (lawmaticsAppointmentId) {
-                    console.log(`[Lawmatics] Linking matter ${lawmaticsMatterId} to event ${lawmaticsAppointmentId}`);
-                    const linkMatterResult = await lawmaticsUpdateEvent(
-                      accessToken,
-                      lawmaticsAppointmentId,
-                      "PATCH",
-                      {
-                        matter_id: parseInt(lawmaticsMatterId, 10),
-                        eventable_type: "Matter",
-                        eventable_id: parseInt(lawmaticsMatterId, 10),
-                      }
-                    );
-
-                    lawmatics_debug.matter_to_event_link = {
-                      attempted: true,
-                      event_id: lawmaticsAppointmentId,
-                      matter_id: lawmaticsMatterId,
-                      status: linkMatterResult.status,
-                      ok: linkMatterResult.ok,
-                      excerpt: linkMatterResult.excerpt,
-                    };
-
-                    if (linkMatterResult.ok) {
-                      console.log(`[Lawmatics] Successfully linked matter ${lawmaticsMatterId} to event ${lawmaticsAppointmentId}`);
-                    } else {
-                      console.warn(`[Lawmatics] Failed to link matter to event: ${linkMatterResult.excerpt}`);
-                      response.warnings!.push(`[lawmatics_link_matter] Failed to link matter to event: ${linkMatterResult.excerpt}`);
-                    }
-                  }
                 } else if (matterResult.warnings?.length) {
                   response.warnings!.push(`[lawmatics_matter] ${matterResult.warnings.join("; ")}`);
                 }
               }
-            } catch (contactMatterErr) {
-              const errMsg = contactMatterErr instanceof Error ? contactMatterErr.message : String(contactMatterErr);
-              console.error("Lawmatics contact/matter error (non-blocking):", errMsg);
-              response.warnings!.push(`[lawmatics_contact_matter] ${errMsg}`);
+            } catch (matterErr) {
+              const errMsg = matterErr instanceof Error ? matterErr.message : String(matterErr);
+              console.error("Lawmatics matter error (non-blocking):", errMsg);
+              response.warnings!.push(`[lawmatics_matter] ${errMsg}`);
             }
           } else if (matterMode === "existing" && existingMatterId) {
             lawmaticsMatterId = existingMatterId;
@@ -965,6 +853,91 @@ serve(async (req) => {
               endpoint: "",
               status: 0,
               id: meeting.lawmatics_matter_id,
+              body_excerpt: "skipped (already exists)",
+            };
+          }
+
+          // --- Lawmatics Event/Appointment (created AFTER matter so we can link to it) ---
+          if (!meeting.lawmatics_appointment_id) {
+            try {
+              await writeLog(supabase, meeting.id, runId, "lawmatics_resolve_user_start", "info", "Resolving Lawmatics owner", {});
+
+              const host = await resolveLawmaticsUserIdByEmail(accessToken, hostAttorney?.email || null);
+              const effectiveTimezone = host.timezone || meeting.timezone || "America/New_York";
+
+              // Resolve all participant Lawmatics user IDs
+              const resolvedParticipantLawmaticsIds: number[] = [];
+              for (const participant of participants) {
+                const resolved = await resolveLawmaticsUserIdByEmail(accessToken, participant.email);
+                if (resolved.userId) {
+                  resolvedParticipantLawmaticsIds.push(resolved.userId);
+                }
+              }
+
+              const eventName = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+              const descriptionParts = [
+                `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
+                `Duration: ${meeting.duration_minutes} minutes`,
+                `Location: ${meeting.location_mode === "InPerson" ? meeting.rooms?.name || "In Person" : "Zoom"}`,
+                hostAttorney ? `Host Attorney: ${hostAttorney.name}` : null,
+                client?.email ? `Client Email: ${client.email}` : null,
+              ].filter(Boolean).join("\n");
+
+              // Pass matterId to link event to matter from creation
+              const appointment = await createOrRepairLawmaticsAppointment(
+                accessToken,
+                {
+                  name: eventName,
+                  description: descriptionParts,
+                  startDatetime,
+                  endDatetime,
+                  timezone: effectiveTimezone,
+                  eventTypeId: pickNumber(meeting.meeting_types?.lawmatics_event_type_id),
+                  locationId: meeting.location_mode === "InPerson" ? pickNumber(meeting.rooms?.lawmatics_location_id) : null,
+                  userId: host.userId,
+                  contactId: lawmaticsContactId ? parseInt(lawmaticsContactId, 10) : null,
+                  matterId: lawmaticsMatterId ? parseInt(lawmaticsMatterId, 10) : null,
+                  requiresLocation: meeting.location_mode === "InPerson",
+                },
+                async (step, level, message, details) => {
+                  await writeLog(supabase, meeting.id, runId, step, level, message, details || {});
+                }
+              );
+
+              // Populate debug info
+              const lastAttempt = (appointment.attempts || [])[(appointment.attempts || []).length - 1];
+              lawmatics_debug.event = {
+                attempted: true,
+                endpoint: lastAttempt?.endpoint || "/v1/events",
+                status: lastAttempt?.status || 0,
+                id: appointment.createdId || undefined,
+                body_excerpt: lastAttempt?.body_excerpt || appointment.error || undefined,
+              };
+              // Track matter linkage separately in debug
+              (lawmatics_debug as any).event_linked_to_matter = lawmaticsMatterId || null;
+
+              if (appointment.createdId) {
+                lawmaticsAppointmentId = appointment.createdId;
+                await supabase
+                  .from("meetings")
+                  .update({ lawmatics_appointment_id: lawmaticsAppointmentId })
+                  .eq("id", meeting.id);
+              } else if (appointment.error) {
+                response.warnings!.push(`[lawmatics_event] ${appointment.error}`);
+              }
+            } catch (eventErr) {
+              const errMsg = eventErr instanceof Error ? eventErr.message : String(eventErr);
+              console.error("Lawmatics event error (non-blocking):", errMsg);
+              response.warnings!.push(`[lawmatics_event] ${errMsg}`);
+              lawmatics_debug.event = { attempted: true, endpoint: "/v1/events", status: 0, body_excerpt: errMsg };
+            }
+          } else {
+            lawmaticsAppointmentId = meeting.lawmatics_appointment_id;
+            lawmatics_debug.event = {
+              attempted: false,
+              endpoint: "/v1/events",
+              status: 0,
+              id: lawmaticsAppointmentId || undefined,
               body_excerpt: "skipped (already exists)",
             };
           }
