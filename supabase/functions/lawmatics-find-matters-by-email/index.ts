@@ -15,6 +15,7 @@ interface LawmaticsMatter {
   practice_area: string | null;
   updated_at: string | null;
   contact_id: string | null;
+  email: string | null;
 }
 
 function pickString(v: any): string | null {
@@ -82,6 +83,7 @@ function parseMatters(rawData: any[]): LawmaticsMatter[] {
       practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
       updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),
       contact_id: pickString(attrs?.contact_id) || pickString(attrs?.primary_contact_id),
+      email: pickString(attrs?.email) || pickString(attrs?.primary_email),
     });
   }
   
@@ -109,6 +111,7 @@ serve(async (req) => {
     }
 
     console.log("[Lawmatics] Searching prospects/matters directly for email:", email);
+    const normalizedEmail = email.toLowerCase().trim();
 
     // Get active Lawmatics connection
     const { data: lawmaticsConnection } = await supabase
@@ -162,8 +165,20 @@ serve(async (req) => {
           console.log("[Lawmatics] Sample prospect structure:", JSON.stringify(rawProspects[0], null, 2));
         }
         
-        matters = parseMatters(rawProspects);
-        console.log(`[Lawmatics] Parsed ${matters.length} matters from prospects`);
+        const parsedMatters = parseMatters(rawProspects);
+        console.log(`[Lawmatics] Parsed ${parsedMatters.length} matters from prospects`);
+        
+        // Filter to only include matters matching the search email exactly
+        matters = parsedMatters.filter(m => 
+          m.email && m.email.toLowerCase().trim() === normalizedEmail
+        );
+        
+        console.log(`[Lawmatics] After email filter: ${matters.length} of ${parsedMatters.length} match ${email}`);
+        
+        if (matters.length === 0 && parsedMatters.length > 0) {
+          console.log(`[Lawmatics] Warning: ${parsedMatters.length} prospects returned but none matched email exactly`);
+          allWarnings.push(`Found ${parsedMatters.length} prospects but none matched email ${email}`);
+        }
       } else if (prospectsResult.status === 404) {
         console.log("[Lawmatics] /v1/prospects returned 404, will try /v1/matters");
         allWarnings.push("/v1/prospects returned 404");
@@ -207,8 +222,20 @@ serve(async (req) => {
             console.log("[Lawmatics] Sample matter structure:", JSON.stringify(rawMatters[0], null, 2));
           }
           
-          matters = parseMatters(rawMatters);
-          console.log(`[Lawmatics] Parsed ${matters.length} matters from /v1/matters`);
+          const parsedMatters = parseMatters(rawMatters);
+          console.log(`[Lawmatics] Parsed ${parsedMatters.length} matters from /v1/matters`);
+          
+          // Filter to only include matters matching the search email exactly
+          matters = parsedMatters.filter(m => 
+            m.email && m.email.toLowerCase().trim() === normalizedEmail
+          );
+          
+          console.log(`[Lawmatics] After email filter: ${matters.length} of ${parsedMatters.length} match ${email}`);
+          
+          if (matters.length === 0 && parsedMatters.length > 0) {
+            console.log(`[Lawmatics] Warning: ${parsedMatters.length} matters returned but none matched email exactly`);
+            allWarnings.push(`Found ${parsedMatters.length} matters but none matched email ${email}`);
+          }
         } else if (mattersResult.status === 404) {
           console.log("[Lawmatics] /v1/matters returned 404");
           allWarnings.push("/v1/matters returned 404");
