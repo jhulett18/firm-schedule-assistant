@@ -1069,6 +1069,7 @@ export interface AppointmentParams {
   locationId?: number | null;
   userId?: number | null;
   contactId?: number | null;
+  matterId?: number | null;
   requiresLocation?: boolean;
 }
 
@@ -1125,6 +1126,7 @@ export async function createOrRepairLawmaticsAppointment(
   const locationId = pickNumber(params.locationId);
   const userId = pickNumber(params.userId);
   const contactId = pickNumber(params.contactId);
+  const matterId = pickNumber(params.matterId);
 
   // Build the event payload per Lawmatics docs
   // Convert UTC timestamps to ISO format with timezone offset (e.g., "2026-01-19T16:00:00-05:00")
@@ -1150,7 +1152,17 @@ export async function createOrRepairLawmaticsAppointment(
     payload.user_id = userId;
     payload.user_ids = [userId];
   }
-  if (contactId) {
+  // Prefer Matter association over Contact if matterId is provided
+  // This ensures the event is connected to the Matter from creation
+  if (matterId) {
+    payload.matter_id = matterId;
+    payload.eventable_type = "Matter";
+    payload.eventable_id = matterId;
+    // Also include contact_id for reference if available
+    if (contactId) {
+      payload.contact_id = contactId;
+    }
+  } else if (contactId) {
     payload.contact_id = contactId;
     payload.eventable_type = "Contact";
     payload.eventable_id = contactId;
