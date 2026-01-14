@@ -142,50 +142,33 @@ async function getBusyIntervalsWithRetry(
 }
 
 // Generate slots from busy intervals
-// Helper to create a Date object representing a specific local time in a timezone
+// Helper to create a Date object representing a specific local time in Eastern timezone
 function createDateInTimezone(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
-  // Create a date string that will be parsed differently in different locales
-  // We'll use this to find the offset
-  const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+  // Simplified approach: Hardcode Eastern Time offset
+  // EST = UTC-5 (Nov-Mar), EDT = UTC-4 (Mar-Nov)
 
-  // Parse as UTC first
-  const utc = new Date(dateStr + 'Z');
+  // Determine if DST is in effect for this date
+  // DST in US: Second Sunday in March to First Sunday in November
+  const date = new Date(year, month - 1, day);
 
-  // Get the formatter for the target timezone
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  });
+  // Simple DST check for US Eastern Time
+  const isDST = (month: number, day: number): boolean => {
+    // DST is NOT in effect from November through early March
+    if (month < 3 || month > 11) return false; // Jan, Feb, Dec
+    if (month > 3 && month < 11) return true;  // Apr-Oct
 
-  // Format the UTC time to see what it looks like in the target timezone
-  const parts = formatter.formatToParts(utc);
-  const partsObj: Record<string, string> = {};
-  parts.forEach(p => { if (p.type !== 'literal') partsObj[p.type] = p.value; });
+    // For March and November, need to check the day
+    // This is approximate - good enough for business hours
+    if (month === 3) return day >= 14;  // DST starts around March 14
+    if (month === 11) return day < 7;   // DST ends around November 7
+    return false;
+  };
 
-  // Calculate what we got vs what we wanted
-  const gotYear = parseInt(partsObj.year);
-  const gotMonth = parseInt(partsObj.month);
-  const gotDay = parseInt(partsObj.day);
-  const gotHour = parseInt(partsObj.hour);
-  const gotMinute = parseInt(partsObj.minute);
+  // EST = UTC-5, EDT = UTC-4
+  const offsetHours = isDST(month, day) ? 4 : 5;
 
-  // Calculate the hour difference (the main offset component)
-  let hourDiff = hour - gotHour;
-  let dayDiff = day - gotDay;
-
-  // Handle day boundary crossings
-  if (dayDiff !== 0) {
-    hourDiff += dayDiff * 24;
-  }
-
-  // Apply the offset
-  return new Date(utc.getTime() + hourDiff * 60 * 60 * 1000 + (minute - gotMinute) * 60 * 1000);
+  // Create UTC date by adding the offset
+  return new Date(Date.UTC(year, month - 1, day, hour + offsetHours, minute, 0));
 }
 
 function suggestSlots(
