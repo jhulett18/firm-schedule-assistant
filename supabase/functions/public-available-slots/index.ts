@@ -27,7 +27,7 @@ interface BusyInterval {
 async function refreshAccessToken(
   connectionId: string,
   refreshToken: string,
-  supabase: any
+  supabase: any,
 ): Promise<{ access_token: string; expires_at: string } | null> {
   const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
   const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
@@ -87,7 +87,7 @@ async function getBusyIntervalsWithRetry(
   calendars: string[],
   start: string,
   end: string,
-  supabase: any
+  supabase: any,
 ): Promise<{ busy: BusyInterval[]; newAccessToken?: string }> {
   let accessToken = connection.access_token;
 
@@ -95,13 +95,13 @@ async function getBusyIntervalsWithRetry(
     const response = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         timeMin: start,
         timeMax: end,
-        items: calendars.map(id => ({ id })),
+        items: calendars.map((id) => ({ id })),
       }),
     });
     return response;
@@ -141,9 +141,15 @@ async function getBusyIntervalsWithRetry(
   return { busy: allBusy, newAccessToken: accessToken !== connection.access_token ? accessToken : undefined };
 }
 
-// Generate slots from busy intervals
 // Helper to create a Date object representing a specific local time in Eastern timezone
-function createDateInTimezone(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
+function createDateInTimezone(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timezone: string,
+): Date {
   // Simplified approach: Hardcode Eastern Time offset
   // EST = UTC-5 (Nov-Mar), EDT = UTC-4 (Mar-Nov)
 
@@ -155,12 +161,12 @@ function createDateInTimezone(year: number, month: number, day: number, hour: nu
   const isDST = (month: number, day: number): boolean => {
     // DST is NOT in effect from November through early March
     if (month < 3 || month > 11) return false; // Jan, Feb, Dec
-    if (month > 3 && month < 11) return true;  // Apr-Oct
+    if (month > 3 && month < 11) return true; // Apr-Oct
 
     // For March and November, need to check the day
     // This is approximate - good enough for business hours
-    if (month === 3) return day >= 14;  // DST starts around March 14
-    if (month === 11) return day < 7;   // DST ends around November 7
+    if (month === 3) return day >= 14; // DST starts around March 14
+    if (month === 11) return day < 7; // DST ends around November 7
     return false;
   };
 
@@ -171,12 +177,13 @@ function createDateInTimezone(year: number, month: number, day: number, hour: nu
   return new Date(Date.UTC(year, month - 1, day, hour + offsetHours, minute, 0));
 }
 
+// Generate slots from busy intervals
 function suggestSlots(
   busyIntervals: BusyInterval[],
   startDate: Date,
   endDate: Date,
   durationMinutes: number,
-  clientTimezone: string
+  clientTimezone: string,
 ): TimeSlot[] {
   const businessHoursStart = "09:00";
   const businessHoursEnd = "17:00";
@@ -190,7 +197,7 @@ function suggestSlots(
 
   // Sort busy intervals by start time
   const sortedBusy = busyIntervals
-    .map(b => ({ start: new Date(b.start), end: new Date(b.end) }))
+    .map((b) => ({ start: new Date(b.start), end: new Date(b.end) }))
     .sort((a, b) => a.start.getTime() - b.start.getTime());
 
   // Iterate through each day
@@ -223,9 +230,7 @@ function suggestSlots(
     const lunchEndTime = createDateInTimezone(year, month, day, lunchEndHour, lunchEndMin, clientTimezone);
 
     // Get busy intervals for this day
-    const dayBusy = sortedBusy.filter(b => 
-      b.start < dayEnd && b.end > dayStart
-    );
+    const dayBusy = sortedBusy.filter((b) => b.start < dayEnd && b.end > dayStart);
 
     // Add lunch as a busy interval
     dayBusy.push({ start: lunchStartTime, end: lunchEndTime });
@@ -238,25 +243,25 @@ function suggestSlots(
       if (busy.start > slotStart) {
         const gapEnd = busy.start;
         const gapDuration = (gapEnd.getTime() - slotStart.getTime()) / (1000 * 60);
-        
+
         if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
           let currentSlotStart = new Date(slotStart);
           while (currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= gapEnd.getTime() && slots.length < 30) {
             if (currentSlotStart >= minimumNoticeTime) {
               const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
-              
+
               // Format label for client display
-              const dayLabel = currentSlotStart.toLocaleDateString('en-US', { 
-                weekday: 'long', 
-                month: 'short', 
-                day: 'numeric' 
+              const dayLabel = currentSlotStart.toLocaleDateString("en-US", {
+                weekday: "long",
+                month: "short",
+                day: "numeric",
               });
-              const timeLabel = currentSlotStart.toLocaleTimeString('en-US', { 
-                hour: 'numeric', 
-                minute: '2-digit',
-                hour12: true 
+              const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
               });
-              
+
               slots.push({
                 start: currentSlotStart.toISOString(),
                 end: slotEnd.toISOString(),
@@ -267,7 +272,7 @@ function suggestSlots(
           }
         }
       }
-      
+
       if (busy.end > slotStart) {
         slotStart = busy.end;
       }
@@ -276,24 +281,24 @@ function suggestSlots(
     // Check for remaining time at end of day
     if (slotStart < dayEnd) {
       const gapDuration = (dayEnd.getTime() - slotStart.getTime()) / (1000 * 60);
-      
+
       if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
         let currentSlotStart = new Date(slotStart);
         while (currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= dayEnd.getTime() && slots.length < 30) {
           if (currentSlotStart >= minimumNoticeTime) {
             const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
-            
-            const dayLabel = currentSlotStart.toLocaleDateString('en-US', { 
-              weekday: 'long', 
-              month: 'short', 
-              day: 'numeric' 
+
+            const dayLabel = currentSlotStart.toLocaleDateString("en-US", {
+              weekday: "long",
+              month: "short",
+              day: "numeric",
             });
-            const timeLabel = currentSlotStart.toLocaleTimeString('en-US', { 
-              hour: 'numeric', 
-              minute: '2-digit',
-              hour12: true 
+            const timeLabel = currentSlotStart.toLocaleTimeString("en-US", {
+              hour: "numeric",
+              minute: "2-digit",
+              hour12: true,
             });
-            
+
             slots.push({
               start: currentSlotStart.toISOString(),
               end: slotEnd.toISOString(),
@@ -325,10 +330,10 @@ serve(async (req) => {
     const { token, dateCursor, clientTimezone = "America/New_York" } = body;
 
     if (!token) {
-      return new Response(
-        JSON.stringify({ error: "Token is required", slots: [] }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Token is required", slots: [] }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log("Fetching available slots for token:", token);
@@ -341,31 +346,32 @@ serve(async (req) => {
       .maybeSingle();
 
     if (brError || !bookingRequest) {
-      return new Response(
-        JSON.stringify({ error: "Booking link not found", slots: [] }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Booking link not found", slots: [] }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Validate booking request status
     if (bookingRequest.status !== "Open") {
-      return new Response(
-        JSON.stringify({ error: "Booking is no longer open", slots: [] }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Booking is no longer open", slots: [] }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     if (new Date(bookingRequest.expires_at) < new Date()) {
-      return new Response(
-        JSON.stringify({ error: "Booking link has expired", slots: [] }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Booking link has expired", slots: [] }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // 2. Fetch meeting details - now including participant_user_ids
     const { data: meeting, error: meetingError } = await supabase
       .from("meetings")
-      .select(`
+      .select(
+        `
         id,
         duration_minutes,
         host_attorney_user_id,
@@ -374,15 +380,16 @@ serve(async (req) => {
         support_user_ids,
         participant_user_ids,
         search_window_days_used
-      `)
+      `,
+      )
       .eq("id", bookingRequest.meeting_id)
       .maybeSingle();
 
     if (meetingError || !meeting) {
-      return new Response(
-        JSON.stringify({ error: "Meeting not found", slots: [] }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Meeting not found", slots: [] }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // 3. Get room resource email if in-person
@@ -393,15 +400,19 @@ serve(async (req) => {
         .select("resource_email")
         .eq("id", meeting.room_id)
         .maybeSingle();
-      
+
       roomResourceEmail = room?.resource_email || null;
     }
 
     // 4. Build list of ALL participant user IDs
     // Priority: use participant_user_ids if populated, else fallback to legacy host + support_user_ids
     let participantUserIds: string[] = [];
-    
-    if (meeting.participant_user_ids && Array.isArray(meeting.participant_user_ids) && meeting.participant_user_ids.length > 0) {
+
+    if (
+      meeting.participant_user_ids &&
+      Array.isArray(meeting.participant_user_ids) &&
+      meeting.participant_user_ids.length > 0
+    ) {
       // Use new participant_user_ids field (includes host + additional participants)
       participantUserIds = meeting.participant_user_ids;
       console.log("Using participant_user_ids:", participantUserIds);
@@ -455,10 +466,8 @@ serve(async (req) => {
 
       try {
         // Use selected_calendar_ids if available, otherwise fall back to ["primary"]
-        const calendarIds = connection.selected_calendar_ids?.length
-          ? connection.selected_calendar_ids
-          : ["primary"];
-        
+        const calendarIds = connection.selected_calendar_ids?.length ? connection.selected_calendar_ids : ["primary"];
+
         console.log(`Checking calendars for participant ${connection.user_id}:`, calendarIds);
 
         const { busy } = await getBusyIntervalsWithRetry(
@@ -466,9 +475,9 @@ serve(async (req) => {
           calendarIds,
           startDate.toISOString(),
           endDate.toISOString(),
-          supabase
+          supabase,
         );
-        
+
         // Add all busy intervals from this participant (intersection = all busy times matter)
         allBusyIntervals.push(...busy);
         console.log(`Added ${busy.length} busy intervals from participant ${connection.user_id}`);
@@ -487,7 +496,7 @@ serve(async (req) => {
           [roomResourceEmail],
           startDate.toISOString(),
           endDate.toISOString(),
-          supabase
+          supabase,
         );
         allBusyIntervals.push(...busy);
       } catch (err) {
@@ -498,13 +507,7 @@ serve(async (req) => {
     console.log(`Total busy intervals across all participants: ${allBusyIntervals.length}`);
 
     // 8. Generate available slots (intersection: free only when ALL are free)
-    const slots = suggestSlots(
-      allBusyIntervals,
-      startDate,
-      endDate,
-      meeting.duration_minutes,
-      clientTimezone
-    );
+    const slots = suggestSlots(allBusyIntervals, startDate, endDate, meeting.duration_minutes, clientTimezone);
 
     console.log(`Found ${slots.length} available slots that work for all participants`);
 
@@ -516,7 +519,7 @@ serve(async (req) => {
     console.error("Error in public-available-slots:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error", slots: [] }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });
