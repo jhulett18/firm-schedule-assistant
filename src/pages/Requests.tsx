@@ -42,8 +42,10 @@ import {
   MapPin,
   Video,
   ArrowRight,
+  CalendarCheck,
 } from "lucide-react";
 import { copyToClipboard, getBookingUrl, generateClientEmailTemplate } from "@/lib/clipboard";
+import { BookClientNowDialog } from "@/components/requests/BookClientNowDialog";
 import type { Json } from "@/integrations/supabase/types";
 
 interface Meeting {
@@ -88,6 +90,8 @@ export default function Requests() {
   const [emailMeeting, setEmailMeeting] = useState<Meeting | null>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelMeeting, setCancelMeeting] = useState<Meeting | null>(null);
+  const [bookNowDialogOpen, setBookNowDialogOpen] = useState(false);
+  const [bookNowMeeting, setBookNowMeeting] = useState<Meeting | null>(null);
 
   // Check for detail view from URL
   const detailId = searchParams.get("id");
@@ -172,6 +176,15 @@ export default function Requests() {
     setCancelDialogOpen(true);
   };
 
+  const handleBookNow = (meeting: Meeting) => {
+    setBookNowMeeting(meeting);
+    setBookNowDialogOpen(true);
+  };
+
+  const handleBookNowSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+  };
+
   // Detail view
   const detailMeeting = detailId ? meetings?.find((m) => m.id === detailId) : null;
 
@@ -247,7 +260,11 @@ export default function Requests() {
                       </Button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    <Button onClick={() => handleBookNow(detailMeeting)}>
+                      <CalendarCheck className="w-4 h-4 mr-2" />
+                      Book Client Now
+                    </Button>
                     <Button variant="outline" onClick={() => handleShowEmail(detailMeeting)}>
                       <Mail className="w-4 h-4 mr-2" />
                       Copy Email Template
@@ -386,6 +403,13 @@ export default function Requests() {
                                 <>
                                   <DropdownMenuItem onClick={(e) => {
                                     e.stopPropagation();
+                                    handleBookNow(meeting);
+                                  }}>
+                                    <CalendarCheck className="w-4 h-4 mr-2" />
+                                    Book Client Now
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={(e) => {
+                                    e.stopPropagation();
                                     handleCopyLink(meeting);
                                   }}>
                                     <Copy className="w-4 h-4 mr-2" />
@@ -479,6 +503,14 @@ export default function Requests() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Book Client Now Dialog */}
+      <BookClientNowDialog
+        open={bookNowDialogOpen}
+        onOpenChange={setBookNowDialogOpen}
+        meeting={bookNowMeeting}
+        onSuccess={handleBookNowSuccess}
+      />
     </MainLayout>
   );
 }
