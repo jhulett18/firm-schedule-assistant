@@ -1080,6 +1080,9 @@ export async function createOrRepairLawmaticsAppointment(
   const startParts = toLocalDateTimeParts(params.startDatetime, params.timezone);
   const endParts = toLocalDateTimeParts(params.endDatetime, params.timezone);
 
+  console.log(`[LAWMATICS TZ DEBUG] Input: ${params.startDatetime} → Timezone: ${params.timezone}`);
+  console.log(`[LAWMATICS TZ DEBUG] Computed: date=${startParts.date} time=${startParts.time}`);
+
   await log("lawmatics_create_event_start", "info", "Creating Lawmatics event", {
     name: params.name,
     start_date: startParts.date,
@@ -1132,6 +1135,16 @@ export async function createOrRepairLawmaticsAppointment(
   try {
     // Create
     {
+      console.log(`[LAWMATICS TZ DEBUG] Payload being sent to Lawmatics:`, JSON.stringify({
+        start_date: payload.start_date,
+        start_time: payload.start_time,
+        end_date: payload.end_date,
+        end_time: payload.end_time,
+        time_zone: payload.time_zone,
+        starts_at: payload.starts_at,
+        ends_at: payload.ends_at,
+      }, null, 2));
+
       const endpoint = "/v1/events";
       const res = await lawmaticsFetch(accessToken, "POST", endpoint, payload);
       const { ok, status, json, excerpt } = await lawmaticsJson(res);
