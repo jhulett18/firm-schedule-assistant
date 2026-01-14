@@ -14,6 +14,7 @@ interface LawmaticsMatter {
   status: string | null;
   practice_area: string | null;
   updated_at: string | null;
+  contact_id: string | null;
 }
 
 function pickString(v: any): string | null {
@@ -55,106 +56,36 @@ async function lawmaticsJson(res: Response): Promise<{
     ok: res.ok,
     status: res.status,
     json,
-    excerpt: (text || "").slice(0, 300),
+    excerpt: (text || "").slice(0, 500),
   };
 }
 
 /**
- * Fetch matters/prospects for a given contact ID with endpoint fallback.
- * Tries the docs endpoint first: /v1/prospects?contact_id=...
- * If 404, falls back to legacy: /v1/matters?contact_id=...
+ * Parse matters from API response data array
  */
-async function fetchMattersForContact(
-  accessToken: string,
-  contactId: string
-): Promise<{ matters: LawmaticsMatter[]; warnings: string[]; attempts: Array<{ endpoint: string; status: number; excerpt: string }> }> {
+function parseMatters(rawData: any[]): LawmaticsMatter[] {
   const matters: LawmaticsMatter[] = [];
-  const warnings: string[] = [];
-  const attempts: Array<{ endpoint: string; status: number; excerpt: string }> = [];
+  
+  for (const m of rawData) {
+    const attrs = m?.attributes ?? m;
+    const id = pickString(m?.id);
+    if (!id) continue;
 
-  // ATTEMPT 1: /v1/prospects (Matters/Prospects)
-  try {
-    const url1 = `/v1/prospects?contact_id=${encodeURIComponent(contactId)}&per_page=50`;
-    console.log("[Lawmatics] Fetching matters via /v1/prospects for contact:", contactId);
-
-    const res1 = await lawmaticsFetch(accessToken, "GET", url1);
-    const result1 = await lawmaticsJson(res1);
-    attempts.push({ endpoint: url1, status: result1.status, excerpt: result1.excerpt });
-
-    if (result1.ok && result1.json) {
-      const rawMatters: any[] = Array.isArray(result1.json?.data) ? result1.json.data : [];
-
-      for (const m of rawMatters) {
-        const attrs = m?.attributes ?? m;
-        const id = pickString(m?.id);
-        if (!id) continue;
-
-        matters.push({
-          id,
-          title:
-            pickString(attrs?.case_title) ||
-            pickString(attrs?.title) ||
-            pickString(attrs?.name) ||
-            `Matter ${id}`,
-          status: pickString(attrs?.status) || pickString(attrs?.stage),
-          practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
-          updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),
-        });
-      }
-
-      return { matters, warnings, attempts };
-    }
-
-    if (result1.status === 404) {
-      warnings.push("/v1/prospects returned 404, trying /v1/matters fallback");
-    } else {
-      warnings.push(`/v1/prospects failed (${result1.status}): ${result1.excerpt}`);
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    warnings.push(`/v1/prospects exception: ${msg}`);
-    attempts.push({ endpoint: "/v1/prospects", status: 0, excerpt: msg });
+    matters.push({
+      id,
+      title:
+        pickString(attrs?.case_title) ||
+        pickString(attrs?.title) ||
+        pickString(attrs?.name) ||
+        `Matter ${id}`,
+      status: pickString(attrs?.status) || pickString(attrs?.stage),
+      practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
+      updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),
+      contact_id: pickString(attrs?.contact_id) || pickString(attrs?.primary_contact_id),
+    });
   }
-
-  // ATTEMPT 2: /v1/matters fallback
-  try {
-    const url2 = `/v1/matters?contact_id=${encodeURIComponent(contactId)}&per_page=50`;
-    console.log("[Lawmatics] Fetching matters via /v1/matters fallback for contact:", contactId);
-
-    const res2 = await lawmaticsFetch(accessToken, "GET", url2);
-    const result2 = await lawmaticsJson(res2);
-    attempts.push({ endpoint: url2, status: result2.status, excerpt: result2.excerpt });
-
-    if (result2.ok && result2.json) {
-      const rawMatters: any[] = Array.isArray(result2.json?.data) ? result2.json.data : [];
-
-      for (const m of rawMatters) {
-        const attrs = m?.attributes ?? m;
-        const id = pickString(m?.id);
-        if (!id) continue;
-
-        matters.push({
-          id,
-          title:
-            pickString(attrs?.case_title) ||
-            pickString(attrs?.title) ||
-            pickString(attrs?.name) ||
-            `Matter ${id}`,
-          status: pickString(attrs?.status) || pickString(attrs?.stage),
-          practice_area: pickString(attrs?.practice_area) || pickString(attrs?.practice_type),
-          updated_at: pickString(attrs?.updated_at) || pickString(attrs?.modified_at),
-        });
-      }
-    } else {
-      warnings.push(`/v1/matters failed (${result2.status}): ${result2.excerpt}`);
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    warnings.push(`/v1/matters exception: ${msg}`);
-    attempts.push({ endpoint: "/v1/matters", status: 0, excerpt: msg });
-  }
-
-  return { matters, warnings, attempts };
+  
+  return matters;
 }
 
 serve(async (req) => {
@@ -177,7 +108,7 @@ serve(async (req) => {
       );
     }
 
-    console.log("Searching Lawmatics matters for email:", email);
+    console.log("[Lawmatics] Searching prospects/matters directly for email:", email);
 
     // Get active Lawmatics connection
     const { data: lawmaticsConnection } = await supabase
@@ -201,57 +132,97 @@ serve(async (req) => {
 
     const accessToken = lawmaticsConnection.access_token;
     const allWarnings: string[] = [];
+    const attempts: Array<{ endpoint: string; status: number; count: number; excerpt: string }> = [];
     let matters: LawmaticsMatter[] = [];
 
-    // STEP 1: Search for contact by email (contact-driven approach)
-    let contactId: string | null = null;
+    // STEP 1: Search prospects endpoint directly by email
     try {
-      const contactRes = await lawmaticsFetch(
-        accessToken,
-        "GET",
-        `/v1/contacts?search=${encodeURIComponent(email)}&per_page=10`
-      );
-      const { ok, status, json, excerpt } = await lawmaticsJson(contactRes);
+      const prospectsUrl = `/v1/prospects?search=${encodeURIComponent(email)}&per_page=50`;
+      console.log("[Lawmatics] Searching prospects:", prospectsUrl);
 
-      if (ok && json) {
-        const contacts: any[] = Array.isArray(json?.data)
-          ? json.data
-          : Array.isArray(json?.contacts)
-            ? json.contacts
-            : [];
+      const prospectsRes = await lawmaticsFetch(accessToken, "GET", prospectsUrl);
+      const prospectsResult = await lawmaticsJson(prospectsRes);
+      
+      const rawProspects: any[] = Array.isArray(prospectsResult.json?.data) 
+        ? prospectsResult.json.data 
+        : [];
+      
+      attempts.push({ 
+        endpoint: prospectsUrl, 
+        status: prospectsResult.status, 
+        count: rawProspects.length,
+        excerpt: prospectsResult.excerpt 
+      });
 
-        // Find exact email match (case-insensitive)
-        const normalizedEmail = email.toLowerCase();
-        const exactMatch = contacts.find((c) => {
-          const attrs = c?.attributes ?? c;
-          const contactEmail = pickString(attrs?.email);
-          return contactEmail?.toLowerCase() === normalizedEmail;
-        });
-
-        if (exactMatch) {
-          contactId = pickString(exactMatch?.id ?? exactMatch?.data?.id);
-          console.log("Found Lawmatics contact:", contactId);
-        } else if (contacts.length > 0) {
-          console.log(`Found ${contacts.length} contacts but no exact email match for ${email}`);
-          allWarnings.push(`Found ${contacts.length} contacts but no exact email match`);
-        } else {
-          console.log("No contacts found for email:", email);
+      if (prospectsResult.ok && rawProspects.length > 0) {
+        console.log(`[Lawmatics] /v1/prospects returned ${rawProspects.length} results`);
+        
+        // Log first result structure for debugging
+        if (rawProspects.length > 0) {
+          console.log("[Lawmatics] Sample prospect structure:", JSON.stringify(rawProspects[0], null, 2));
         }
+        
+        matters = parseMatters(rawProspects);
+        console.log(`[Lawmatics] Parsed ${matters.length} matters from prospects`);
+      } else if (prospectsResult.status === 404) {
+        console.log("[Lawmatics] /v1/prospects returned 404, will try /v1/matters");
+        allWarnings.push("/v1/prospects returned 404");
+      } else if (!prospectsResult.ok) {
+        console.warn(`[Lawmatics] /v1/prospects failed (${prospectsResult.status}):`, prospectsResult.excerpt);
+        allWarnings.push(`/v1/prospects failed (${prospectsResult.status})`);
       } else {
-        allWarnings.push(`Contact search failed (${status}): ${excerpt}`);
-        console.warn("Contact search failed:", status, excerpt);
+        console.log("[Lawmatics] /v1/prospects returned 0 results");
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      allWarnings.push(`Contact search exception: ${msg}`);
-      console.error("Error searching for contact:", msg);
+      allWarnings.push(`/v1/prospects exception: ${msg}`);
+      console.error("[Lawmatics] /v1/prospects exception:", msg);
     }
 
-    // STEP 2: If contact found, fetch matters with fallback endpoint strategy
-    if (contactId) {
-      const { matters: contactMatters, warnings: fetchWarnings } = await fetchMattersForContact(accessToken, contactId);
-      matters = contactMatters;
-      allWarnings.push(...fetchWarnings);
+    // STEP 2: If no matters found, try /v1/matters endpoint as fallback
+    if (matters.length === 0) {
+      try {
+        const mattersUrl = `/v1/matters?search=${encodeURIComponent(email)}&per_page=50`;
+        console.log("[Lawmatics] Searching matters fallback:", mattersUrl);
+
+        const mattersRes = await lawmaticsFetch(accessToken, "GET", mattersUrl);
+        const mattersResult = await lawmaticsJson(mattersRes);
+        
+        const rawMatters: any[] = Array.isArray(mattersResult.json?.data) 
+          ? mattersResult.json.data 
+          : [];
+        
+        attempts.push({ 
+          endpoint: mattersUrl, 
+          status: mattersResult.status, 
+          count: rawMatters.length,
+          excerpt: mattersResult.excerpt 
+        });
+
+        if (mattersResult.ok && rawMatters.length > 0) {
+          console.log(`[Lawmatics] /v1/matters returned ${rawMatters.length} results`);
+          
+          // Log first result structure for debugging
+          if (rawMatters.length > 0) {
+            console.log("[Lawmatics] Sample matter structure:", JSON.stringify(rawMatters[0], null, 2));
+          }
+          
+          matters = parseMatters(rawMatters);
+          console.log(`[Lawmatics] Parsed ${matters.length} matters from /v1/matters`);
+        } else if (mattersResult.status === 404) {
+          console.log("[Lawmatics] /v1/matters returned 404");
+          allWarnings.push("/v1/matters returned 404");
+        } else if (!mattersResult.ok) {
+          console.warn(`[Lawmatics] /v1/matters failed (${mattersResult.status}):`, mattersResult.excerpt);
+          allWarnings.push(`/v1/matters failed (${mattersResult.status})`);
+        } else {
+          console.log("[Lawmatics] /v1/matters returned 0 results");
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        allWarnings.push(`/v1/matters exception: ${msg}`);
+        console.error("[Lawmatics] /v1/matters exception:", msg);
+      }
     }
 
     // Sort by updated_at descending (most recent first)
@@ -262,13 +233,13 @@ serve(async (req) => {
       return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
     });
 
-    console.log("Returning matters:", matters.length, "with warnings:", allWarnings.length);
+    console.log(`[Lawmatics] Returning ${matters.length} matters for email ${email}`);
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         matters, 
-        contactId,
+        attempts,
         warnings: allWarnings.length > 0 ? allWarnings : undefined
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
