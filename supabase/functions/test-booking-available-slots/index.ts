@@ -121,42 +121,6 @@ async function getBusyIntervalsForCalendar(
   return calendar?.busy || [];
 }
 
-// Helper to create a Date object representing a specific local time in Eastern timezone
-function createDateInTimezone(
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-  timezone: string,
-): Date {
-  // Simplified approach: Hardcode Eastern Time offset
-  // EST = UTC-5 (Nov-Mar), EDT = UTC-4 (Mar-Nov)
-
-  // Determine if DST is in effect for this date
-  // DST in US: Second Sunday in March to First Sunday in November
-  const date = new Date(year, month - 1, day);
-
-  // Simple DST check for US Eastern Time
-  const isDST = (month: number, day: number): boolean => {
-    // DST is NOT in effect from November through early March
-    if (month < 3 || month > 11) return false; // Jan, Feb, Dec
-    if (month > 3 && month < 11) return true; // Apr-Oct
-
-    // For March and November, need to check the day
-    // This is approximate - good enough for business hours
-    if (month === 3) return day >= 14; // DST starts around March 14
-    if (month === 11) return day < 7; // DST ends around November 7
-    return false;
-  };
-
-  // EST = UTC-5, EDT = UTC-4
-  const offsetHours = isDST(month, day) ? 4 : 5;
-
-  // Create UTC date by adding the offset
-  return new Date(Date.UTC(year, month - 1, day, hour + offsetHours, minute, 0));
-}
-
 function suggestSlots(
   busyIntervals: BusyInterval[],
   startDate: Date,
@@ -195,13 +159,21 @@ function suggestSlots(
     const month = currentDate.getMonth() + 1;
     const day = currentDate.getDate();
 
-    const dayStart = createDateInTimezone(year, month, day, startHour, startMin, timezone);
-    const dayEnd = createDateInTimezone(year, month, day, endHour, endMin, timezone);
+    // INLINE TIMEZONE FIX - Calculate UTC time for Eastern timezone
+    // EST = UTC-5 (Nov-Mar), EDT = UTC-4 (Mar-Nov)
+    const isDST = (month > 3 && month < 11) || (month === 3 && day >= 14) || (month === 11 && day < 7);
+    const offsetHours = isDST ? 4 : 5;
+
+    // Create UTC dates by adding EST/EDT offset
+    const dayStart = new Date(Date.UTC(year, month - 1, day, startHour + offsetHours, startMin, 0));
+    const dayEnd = new Date(Date.UTC(year, month - 1, day, endHour + offsetHours, endMin, 0));
+
+    console.log(`[TIMEZONE DEBUG] ${year}-${month}-${day} ${startHour}:00 EST → UTC: ${dayStart.toISOString()}`);
 
     const [lunchStartHour, lunchStartMin] = lunchStart.split(":").map(Number);
     const [lunchEndHour, lunchEndMin] = lunchEnd.split(":").map(Number);
-    const lunchStartTime = createDateInTimezone(year, month, day, lunchStartHour, lunchStartMin, timezone);
-    const lunchEndTime = createDateInTimezone(year, month, day, lunchEndHour, lunchEndMin, timezone);
+    const lunchStartTime = new Date(Date.UTC(year, month - 1, day, lunchStartHour + offsetHours, lunchStartMin, 0));
+    const lunchEndTime = new Date(Date.UTC(year, month - 1, day, lunchEndHour + offsetHours, lunchEndMin, 0));
 
     const dayBusy = sortedBusy.filter((b) => b.start < dayEnd && b.end > dayStart);
     dayBusy.push({ start: lunchStartTime, end: lunchEndTime });
