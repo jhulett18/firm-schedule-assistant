@@ -26,7 +26,7 @@ interface BusyInterval {
 async function refreshAccessToken(
   connectionId: string,
   refreshToken: string,
-  supabase: any
+  supabase: any,
 ): Promise<{ access_token: string; expires_at: string } | null> {
   const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
   const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
@@ -83,7 +83,7 @@ async function getBusyIntervalsForCalendar(
   calendarId: string,
   start: string,
   end: string,
-  supabase: any
+  supabase: any,
 ): Promise<BusyInterval[]> {
   let accessToken = connection.access_token;
 
@@ -122,7 +122,14 @@ async function getBusyIntervalsForCalendar(
 }
 
 // Helper to create a Date object representing a specific local time in Eastern timezone
-function createDateInTimezone(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
+function createDateInTimezone(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timezone: string,
+): Date {
   // Simplified approach: Hardcode Eastern Time offset
   // EST = UTC-5 (Nov-Mar), EDT = UTC-4 (Mar-Nov)
 
@@ -134,12 +141,12 @@ function createDateInTimezone(year: number, month: number, day: number, hour: nu
   const isDST = (month: number, day: number): boolean => {
     // DST is NOT in effect from November through early March
     if (month < 3 || month > 11) return false; // Jan, Feb, Dec
-    if (month > 3 && month < 11) return true;  // Apr-Oct
+    if (month > 3 && month < 11) return true; // Apr-Oct
 
     // For March and November, need to check the day
     // This is approximate - good enough for business hours
-    if (month === 3) return day >= 14;  // DST starts around March 14
-    if (month === 11) return day < 7;   // DST ends around November 7
+    if (month === 3) return day >= 14; // DST starts around March 14
+    if (month === 11) return day < 7; // DST ends around November 7
     return false;
   };
 
@@ -155,7 +162,7 @@ function suggestSlots(
   startDate: Date,
   endDate: Date,
   durationMinutes: number,
-  timezone: string = "America/New_York"
+  timezone: string = "America/New_York",
 ): TimeSlot[] {
   const businessHoursStart = "09:00";
   const businessHoursEnd = "17:00";
@@ -209,10 +216,7 @@ function suggestSlots(
 
         if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
           let currentSlotStart = new Date(slotStart);
-          while (
-            currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= gapEnd.getTime() &&
-            slots.length < 30
-          ) {
+          while (currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= gapEnd.getTime() && slots.length < 30) {
             if (currentSlotStart >= minimumNoticeTime) {
               const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
               const dayLabel = currentSlotStart.toLocaleDateString("en-US", {
@@ -247,10 +251,7 @@ function suggestSlots(
 
       if (gapDuration >= durationMinutes && slotStart >= minimumNoticeTime) {
         let currentSlotStart = new Date(slotStart);
-        while (
-          currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= dayEnd.getTime() &&
-          slots.length < 30
-        ) {
+        while (currentSlotStart.getTime() + durationMinutes * 60 * 1000 <= dayEnd.getTime() && slots.length < 30) {
           if (currentSlotStart >= minimumNoticeTime) {
             const slotEnd = new Date(currentSlotStart.getTime() + durationMinutes * 60 * 1000);
             const dayLabel = currentSlotStart.toLocaleDateString("en-US", {
@@ -304,7 +305,10 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
+    const {
+      data: { user },
+      error: authError,
+    } = await userSupabase.auth.getUser();
     if (authError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized", slots: [] }), {
         status: 401,
@@ -340,15 +344,15 @@ serve(async (req) => {
     }
 
     // Get admin's test calendar ID from preferences
-    const preferences = meeting.preferences as Record<string, any> || {};
+    const preferences = (meeting.preferences as Record<string, any>) || {};
     const adminCalendarId = preferences.admin_calendar_id;
     const adminCalendarUserId = preferences.admin_calendar_user_id;
 
     if (!adminCalendarId || !adminCalendarUserId) {
-      return new Response(
-        JSON.stringify({ error: "Test booking preferences not set", slots: [] }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Test booking preferences not set", slots: [] }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log("Fetching availability for calendar:", adminCalendarId);
@@ -362,10 +366,10 @@ serve(async (req) => {
       .maybeSingle();
 
     if (connError || !connection) {
-      return new Response(
-        JSON.stringify({ error: "No Google calendar connection found", slots: [] }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "No Google calendar connection found", slots: [] }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const searchWindowDays = 14;
@@ -378,7 +382,7 @@ serve(async (req) => {
       adminCalendarId,
       startDate.toISOString(),
       endDate.toISOString(),
-      supabase
+      supabase,
     );
 
     console.log(`Found ${busyIntervals.length} busy intervals for calendar ${adminCalendarId}`);
@@ -390,7 +394,7 @@ serve(async (req) => {
         meeting.rooms.resource_email,
         startDate.toISOString(),
         endDate.toISOString(),
-        supabase
+        supabase,
       );
       busyIntervals.push(...roomBusy);
       console.log(`Added ${roomBusy.length} room busy intervals`);
@@ -408,7 +412,7 @@ serve(async (req) => {
     console.error("Error in test-booking-available-slots:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error", slots: [] }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });
