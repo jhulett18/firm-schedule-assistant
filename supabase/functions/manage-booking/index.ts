@@ -168,7 +168,7 @@ async function deleteLawmaticsAppointment(
   }
 }
 
-async function cancelGoogleEvents(
+async function deleteGoogleEvents(
   supabase: any,
   meetingId: string,
   warnings: string[]
@@ -212,6 +212,80 @@ async function cancelGoogleEvents(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       warnings.push(`Google event delete failed for user ${ev.user_id}: ${msg}`);
+    }
+  }
+}
+
+async function cancelGoogleEvents(
+  supabase: any,
+  meetingId: string,
+  warnings: string[]
+): Promise<void> {
+  const { data: googleEvents } = await supabase
+    .from("meeting_google_events")
+    .select("user_id, google_calendar_id, google_event_id")
+    .eq("meeting_id", meetingId);
+
+  for (const ev of googleEvents || []) {
+    const { data: connection } = await supabase
+      .from("calendar_connections")
+      .select("*")
+      .eq("provider", "google")
+      .eq("user_id", ev.user_id)
+      .maybeSingle();
+
+    if (!connection) {
+      warnings.push(`Google connection missing for user ${ev.user_id}.`);
+      continue;
+    }
+
+    const { accessToken, error: tokenError } = await refreshGoogleTokenIfNeeded(supabase, connection);
+    if (!accessToken) {
+      warnings.push(tokenError || `Google token error for user ${ev.user_id}.`);
+      continue;
+    }
+
+    try {
+      const eventRes = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(ev.google_calendar_id)}/events/${encodeURIComponent(ev.google_event_id)}`,
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+
+      if (!eventRes.ok) {
+        if (eventRes.status === 404 || eventRes.status === 410) {
+          continue;
+        }
+        warnings.push(`Google event fetch failed for user ${ev.user_id} (${eventRes.status}).`);
+        continue;
+      }
+
+      const eventData = await eventRes.json();
+      const summary = typeof eventData?.summary === "string" ? eventData.summary : "Appointment";
+      const cancelledSummary = summary.toLowerCase().startsWith("cancelled")
+        ? summary
+        : `Cancelled - ${summary}`;
+
+      const patchRes = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(ev.google_calendar_id)}/events/${encodeURIComponent(ev.google_event_id)}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ summary: cancelledSummary }),
+        }
+      );
+
+      if (!patchRes.ok) {
+        warnings.push(`Google event update failed for user ${ev.user_id} (${patchRes.status}).`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`Google event update failed for user ${ev.user_id}: ${msg}`);
     }
   }
 }
@@ -329,7 +403,7 @@ serve(async (req) => {
 
     if (action === "reschedule") {
       await deleteLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings);
-      await cancelGoogleEvents(supabase, meeting.id, warnings);
+      await deleteGoogleEvents(supabase, meeting.id, warnings);
 
       // Fetch full meeting data for notification
       const { data: fullMeeting } = await supabase
