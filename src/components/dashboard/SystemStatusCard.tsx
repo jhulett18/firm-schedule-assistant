@@ -59,16 +59,19 @@ export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
   const hasIssues = items.some((item) => item.required && !item.connected);
 
   return (
-    <Card>
-      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} asChild>
+      <Card>
         <CollapsibleTrigger asChild>
-          <CardHeader className="pb-3 cursor-pointer hover:bg-muted/50 transition-colors rounded-t-lg">
+          <CardHeader className={cn(
+            "cursor-pointer hover:bg-muted/50 transition-colors",
+            isOpen ? "pb-3" : "pb-6"
+          )}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <CardTitle className="text-lg">System Status</CardTitle>
                 <ChevronDown
                   className={cn(
-                    "w-4 h-4 text-muted-foreground transition-transform",
+                    "w-4 h-4 text-muted-foreground transition-transform duration-200",
                     isOpen && "rotate-180"
                   )}
                 />
@@ -87,8 +90,8 @@ export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
             </div>
           </CardHeader>
         </CollapsibleTrigger>
-        <CollapsibleContent>
-          <CardContent>
+        <CollapsibleContent className="data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down overflow-hidden">
+          <CardContent className="pt-0">
             <div className="space-y-3">
               {items.map((item) => (
                 <div key={item.label} className="flex items-center justify-between">
@@ -115,7 +118,7 @@ export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
             </div>
           </CardContent>
         </CollapsibleContent>
-      </Collapsible>
-    </Card>
+      </Card>
+    </Collapsible>
   );
 }
