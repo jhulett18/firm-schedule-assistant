@@ -102,7 +102,7 @@ async function cancelLawmaticsAppointment(
   appointmentId: string | null,
   warnings: string[]
 ): Promise<void> {
-  if (!appointmentId) return;
+  if (!appointmentId) return { clearAppointmentId: false };
 
   const { data: lawmaticsConnection } = await supabase
     .from("lawmatics_connections")
@@ -146,7 +146,7 @@ async function deleteLawmaticsAppointment(
   supabase: any,
   appointmentId: string | null,
   warnings: string[]
-): Promise<void> {
+): Promise<{ clearAppointmentId: boolean }> {
   if (!appointmentId) return;
 
   const { data: lawmaticsConnection } = await supabase
@@ -158,7 +158,7 @@ async function deleteLawmaticsAppointment(
 
   if (!lawmaticsConnection?.access_token) {
     warnings.push("Lawmatics not connected; appointment was not deleted.");
-    return;
+    return { clearAppointmentId: false };
   }
 
   const accessToken = lawmaticsConnection.access_token;
@@ -173,7 +173,7 @@ async function deleteLawmaticsAppointment(
   if (!stillExists) {
     // Event is gone - deletion confirmed
     console.log(`[manage-booking] Lawmatics event ${appointmentId} deletion verified (not found)`);
-    return;
+    return { clearAppointmentId: true };
   }
 
   // Step 3: Event still exists - Lawmatics likely soft-deleted or DELETE failed
@@ -202,15 +202,18 @@ async function deleteLawmaticsAppointment(
   
   if (fallbackUpdate.ok) {
     warnings.push("Lawmatics does not support hard delete; the previous appointment was marked as cancelled/rescheduled.");
-  } else {
-    // Try minimal fallback - just the name
-    const minimalUpdate = await lawmaticsUpdateEvent(accessToken, appointmentId, "PATCH", { name: cleanedName });
-    if (minimalUpdate.ok) {
-      warnings.push("Lawmatics does not support hard delete; the previous appointment was renamed to indicate removal.");
-    } else {
-      warnings.push(`Lawmatics delete and fallback cleanup failed for appointment ${appointmentId}.`);
-    }
+    return { clearAppointmentId: true };
   }
+
+  // Try minimal fallback - just the name
+  const minimalUpdate = await lawmaticsUpdateEvent(accessToken, appointmentId, "PATCH", { name: cleanedName });
+  if (minimalUpdate.ok) {
+    warnings.push("Lawmatics does not support hard delete; the previous appointment was renamed to indicate removal.");
+    return { clearAppointmentId: true };
+  }
+
+  warnings.push(`Lawmatics delete and fallback cleanup failed for appointment ${appointmentId}.`);
+  return { clearAppointmentId: false };
 }
 
 async function deleteGoogleEvents(
@@ -459,14 +462,18 @@ serve(async (req) => {
       const clampedExpiresDays = Math.max(1, expiresDays);
       const newExpiresAt = new Date(Date.now() + clampedExpiresDays * 24 * 60 * 60 * 1000).toISOString();
 
-      // Update meeting - keep lawmatics_appointment_id so confirm-booking can delete it later
+      const { clearAppointmentId } = await deleteLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings) || {
+        clearAppointmentId: false,
+      };
+
+      // Update meeting - clear lawmatics_appointment_id when deletion/cleanup succeeded
       const { error: meetingUpdateError } = await supabase
         .from("meetings")
         .update({
           status: "Rescheduled",
           start_datetime: null,
           end_datetime: null,
-          // NOTE: lawmatics_appointment_id is kept - will be deleted when new booking is confirmed
+          ...(clearAppointmentId ? { lawmatics_appointment_id: null } : {}),
           updated_at: new Date().toISOString(),
         })
         .eq("id", meeting.id);
