@@ -17,6 +17,7 @@ import {
   Plus,
   UserCog,
 } from "lucide-react";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { cn } from "@/lib/utils";
 
 interface MainLayoutProps {
@@ -128,6 +129,8 @@ export function MainLayout({ children }: MainLayoutProps) {
             <Plus className="w-4 h-4" />
             New Request
           </Button>
+
+          <NotificationCenter />
 
           {isAdmin && (
             <Button

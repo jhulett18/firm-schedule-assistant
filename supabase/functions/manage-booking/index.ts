@@ -305,6 +305,13 @@ serve(async (req) => {
       await cancelLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings);
       await cancelGoogleEvents(supabase, meeting.id, warnings);
 
+      // Fetch full meeting data for notification
+      const { data: fullMeeting } = await supabase
+        .from("meetings")
+        .select("created_by_user_id, external_attendees")
+        .eq("id", meeting.id)
+        .single();
+
       const preferredExpiresDays = parseNumber(preferences.bookingRequestExpiresDays);
       const expiresDays = preferredExpiresDays ?? (await fetchAppSettingNumber(supabase, "booking_request_expires_days", 7));
       const clampedExpiresDays = Math.max(1, expiresDays);
@@ -354,6 +361,23 @@ serve(async (req) => {
         },
       });
 
+      // Create notification for meeting creator
+      if (fullMeeting?.created_by_user_id) {
+        let clientName = "A client";
+        const attendees = fullMeeting.external_attendees as Array<{ name?: string; email?: string }> | null;
+        if (attendees && attendees.length > 0) {
+          clientName = attendees[0]?.name || attendees[0]?.email || "A client";
+        }
+
+        await supabase.from("notifications").insert({
+          user_id: fullMeeting.created_by_user_id,
+          type: "meeting_rescheduled",
+          title: "Appointment Rescheduled",
+          message: `${clientName} has requested to reschedule their appointment.`,
+          meeting_id: meeting.id,
+        });
+      }
+
       const response: ManageBookingResponse = {
         success: true,
         action,
@@ -373,6 +397,13 @@ serve(async (req) => {
     if (action === "cancel") {
       await cancelLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings);
       await cancelGoogleEvents(supabase, meeting.id, warnings);
+
+      // Fetch full meeting data for notification
+      const { data: fullMeeting } = await supabase
+        .from("meetings")
+        .select("created_by_user_id, external_attendees")
+        .eq("id", meeting.id)
+        .single();
 
       const { error: meetingUpdateError } = await supabase
         .from("meetings")
@@ -394,6 +425,9 @@ serve(async (req) => {
         .update({ status: "Expired", expires_at: new Date().toISOString() })
         .eq("id", bookingRequest.id);
 
+      // Clean up Google event records (matches reschedule behavior)
+      await supabase.from("meeting_google_events").delete().eq("meeting_id", meeting.id);
+
       await supabase.from("audit_logs").insert({
         action_type: "Cancelled",
         meeting_id: meeting.id,
@@ -405,6 +439,23 @@ serve(async (req) => {
           booking_request_id: bookingRequest.id,
         },
       });
+
+      // Create notification for meeting creator
+      if (fullMeeting?.created_by_user_id) {
+        let clientName = "A client";
+        const attendees = fullMeeting.external_attendees as Array<{ name?: string; email?: string }> | null;
+        if (attendees && attendees.length > 0) {
+          clientName = attendees[0]?.name || attendees[0]?.email || "A client";
+        }
+
+        await supabase.from("notifications").insert({
+          user_id: fullMeeting.created_by_user_id,
+          type: "meeting_cancelled",
+          title: "Appointment Cancelled",
+          message: `${clientName} has cancelled their appointment.`,
+          meeting_id: meeting.id,
+        });
+      }
 
       const response: ManageBookingResponse = {
         success: true,
