@@ -13,6 +13,7 @@ import { TimezoneSelector } from "@/components/public-booking/TimezoneSelector";
 import { ApiDebugButton, type ApiCall } from "@/components/public-booking/ApiDebugPanel";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ScheduleCalendarPicker } from "@/components/public-booking/ScheduleCalendarPicker";
+import { AlreadyBookedState } from "@/components/public-booking/AlreadyBookedState";
 
 const ACTIVE_BOOKING_TOKEN_KEY = 'ACTIVE_BOOKING_TOKEN';
 
@@ -385,21 +386,23 @@ export default function Schedule() {
     return (
       <div className="min-h-screen bg-background py-8 px-4">
         <div className="max-w-lg mx-auto space-y-6">
-          <Card className="border-green-200 bg-green-50/50 dark:border-green-900 dark:bg-green-950/20">
-            <CardContent className="pt-6">
-              <div className="flex flex-col items-center text-center gap-4">
-                <div className="h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center">
-                  <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold text-foreground mb-2">You're All Set!</h2>
-                  <p className="text-muted-foreground">
-                    Your meeting has been scheduled. We look forward to speaking with you.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <AlreadyBookedState
+            meetingTypeName={meeting.meetingTypeName}
+            startDatetime={startDate}
+            durationMinutes={meeting.durationMinutes}
+            locationMode={meeting.locationMode}
+            locationDisplay={getLocationDisplay()}
+            contactEmail={contact.email}
+            contactPhone={contact.phone}
+            token={token || undefined}
+            onReschedule={() => {
+              setCurrentState("needs_scheduling");
+              token && fetchAvailableSlots(token);
+            }}
+            onCancelled={() => {
+              setCurrentState("cancelled");
+            }}
+          />
 
           {/* Show warnings if any */}
           {confirmWarnings.length > 0 && (
@@ -417,32 +420,6 @@ export default function Schedule() {
               </AlertDescription>
             </Alert>
           )}
-
-          {/* Meeting details */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">{meeting.meetingTypeName}</CardTitle>
-              <CardDescription>Meeting Details</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center gap-3 text-sm">
-                <Calendar className="h-4 w-4 text-muted-foreground" />
-                <span>{format(startDate, "EEEE, MMMM d, yyyy 'at' h:mm a")}</span>
-              </div>
-              <div className="flex items-center gap-3 text-sm">
-                <Clock className="h-4 w-4 text-muted-foreground" />
-                <span>{meeting.durationMinutes} minutes</span>
-              </div>
-              <div className="flex items-center gap-3 text-sm">
-                {meeting.locationMode === "Zoom" ? (
-                  <Video className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <MapPin className="h-4 w-4 text-muted-foreground" />
-                )}
-                <span>{getLocationDisplay()}</span>
-              </div>
-            </CardContent>
-          </Card>
           
           {/* Debug button */}
           {apiCalls.length > 0 && (
