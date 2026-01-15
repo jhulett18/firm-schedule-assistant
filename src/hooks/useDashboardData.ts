@@ -2,21 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
-export interface GoogleConnectionInfo {
-  userId: string;
-  userName: string;
-  userEmail: string;
-  lastVerifiedOk: boolean | null;
-  lastVerifiedAt: string | null;
-}
-
 export interface SystemStatus {
   lawmaticsConnected: boolean;
   calendarConnected: boolean;
   roomsCount: number;
   meetingTypesCount: number;
   presetsCount: number;
-  googleConnections: GoogleConnectionInfo[];
 }
 
 export interface SetupStep {
@@ -61,32 +52,6 @@ export function useDashboardData() {
       return !!data;
     },
     enabled: !!internalUser?.id,
-  });
-
-  // Fetch all Google calendar connections (for admin dashboard display)
-  const { data: googleConnections, isLoading: loadingGoogleConnections } = useQuery({
-    queryKey: ["google-connections-dashboard"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("calendar_connections")
-        .select(`
-          user_id,
-          last_verified_ok,
-          last_verified_at,
-          users:user_id (id, name, email)
-        `)
-        .eq("provider", "google");
-      
-      if (error) throw error;
-      
-      return (data || []).map((conn: any) => ({
-        userId: conn.user_id,
-        userName: conn.users?.name || "Unknown",
-        userEmail: conn.users?.email || "",
-        lastVerifiedOk: conn.last_verified_ok,
-        lastVerifiedAt: conn.last_verified_at,
-      })) as GoogleConnectionInfo[];
-    },
   });
 
   // Fetch rooms count
@@ -160,7 +125,6 @@ export function useDashboardData() {
     roomsCount: roomsCount ?? 0,
     meetingTypesCount: meetingTypesCount ?? 0,
     presetsCount: presetsCount ?? 0,
-    googleConnections: googleConnections ?? [],
   };
 
   const setupSteps: SetupStep[] = [
@@ -250,7 +214,6 @@ export function useDashboardData() {
   const isLoading =
     loadingLawmatics ||
     loadingCalendar ||
-    loadingGoogleConnections ||
     loadingRooms ||
     loadingMeetingTypes ||
     loadingPresets ||
