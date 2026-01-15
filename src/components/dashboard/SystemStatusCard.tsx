@@ -1,10 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle, XCircle, AlertCircle } from "lucide-react";
-import { Link } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
 import type { SystemStatus } from "@/hooks/useDashboardData";
-import { formatDistanceToNow } from "date-fns";
 
 interface SystemStatusCardProps {
   status: SystemStatus;
@@ -12,7 +9,6 @@ interface SystemStatusCardProps {
 }
 
 export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
-  const { isAdmin } = useAuth();
 
   if (isLoading) {
     return (
@@ -100,46 +96,6 @@ export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
               )}
             </div>
           ))}
-
-          {/* Google Connections List (Admin only) */}
-          {isAdmin && status.googleConnections.length > 0 && (
-            <div className="pt-3 border-t mt-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium">Google Connections: {status.googleConnections.length}</span>
-                <Link to="/admin/settings#calendar" className="text-xs text-primary hover:underline">
-                  Manage
-                </Link>
-              </div>
-              <div className="space-y-1.5">
-                {status.googleConnections.slice(0, 3).map((conn) => (
-                  <div key={conn.userId} className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground truncate max-w-[120px]" title={conn.userName}>
-                      {conn.userName}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {conn.lastVerifiedOk === null ? (
-                        <Badge variant="secondary" className="text-[10px] px-1 py-0">Unverified</Badge>
-                      ) : conn.lastVerifiedOk ? (
-                        <Badge className="bg-green-600 text-[10px] px-1 py-0">OK</Badge>
-                      ) : (
-                        <Badge variant="destructive" className="text-[10px] px-1 py-0">Failed</Badge>
-                      )}
-                      {conn.lastVerifiedAt && (
-                        <span className="text-muted-foreground">
-                          {formatDistanceToNow(new Date(conn.lastVerifiedAt), { addSuffix: true })}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {status.googleConnections.length > 3 && (
-                  <Link to="/admin/settings#calendar" className="text-xs text-primary hover:underline block">
-                    +{status.googleConnections.length - 3} more
-                  </Link>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </CardContent>
     </Card>
