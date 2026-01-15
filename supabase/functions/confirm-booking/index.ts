@@ -426,14 +426,19 @@ async function createGoogleCalendarEventsForAllParticipants(
 async function deleteGoogleEventsForMeeting(
   supabase: any,
   meetingId: string,
-  warnings: string[]
+  warnings: string[],
+  googleEvents?: Array<{ user_id: string; google_calendar_id: string; google_event_id: string }>
 ): Promise<void> {
-  const { data: googleEvents } = await supabase
-    .from("meeting_google_events")
-    .select("user_id, google_calendar_id, google_event_id")
-    .eq("meeting_id", meetingId);
+  const events =
+    googleEvents ??
+    (
+      await supabase
+        .from("meeting_google_events")
+        .select("user_id, google_calendar_id, google_event_id")
+        .eq("meeting_id", meetingId)
+    ).data;
 
-  for (const ev of googleEvents || []) {
+  for (const ev of events || []) {
     const { data: connection } = await supabase
       .from("calendar_connections")
       .select("*")
@@ -470,7 +475,14 @@ async function deleteGoogleEventsForMeeting(
     }
   }
 
-  await supabase.from("meeting_google_events").delete().eq("meeting_id", meetingId);
+  const idsToDelete = (events || []).map(({ google_event_id }: { google_event_id: string }) => google_event_id).filter(Boolean);
+  if (idsToDelete.length > 0) {
+    await supabase
+      .from("meeting_google_events")
+      .delete()
+      .eq("meeting_id", meetingId)
+      .in("google_event_id", idsToDelete);
+  }
 }
 
 serve(async (req) => {
@@ -750,65 +762,13 @@ serve(async (req) => {
         if (lawmaticsConnection?.access_token) {
           const accessToken = lawmaticsConnection.access_token;
 
-          // === RESCHEDULE CLEANUP: Delete old Lawmatics appointment if this is a reschedule ===
-          if (isReschedule && oldLawmaticsAppointmentId) {
-            console.log(`[confirm-booking] Reschedule detected - deleting old Lawmatics appointment: ${oldLawmaticsAppointmentId}`);
-            try {
-              // Step 1: Attempt DELETE
-              const deleteResult = await lawmaticsDeleteEvent(accessToken, oldLawmaticsAppointmentId);
-              console.log(`[confirm-booking] Lawmatics DELETE result for ${oldLawmaticsAppointmentId}:`, deleteResult);
+          // === RESCHEDULE CLEANUP (DEFERRED) ===
+          // Do not delete/cancel the existing Lawmatics appointment until AFTER the new time is
+          // successfully confirmed AND the new appointment is created.
+          // This prevents the original appointment from being removed if the reschedule confirm
+          // fails mid-flight.
+          // === END RESCHEDULE CLEANUP (DEFERRED) ===
 
-              // Step 2: Verify deletion by attempting to read the event
-              const stillExists = await lawmaticsReadEvent(accessToken, oldLawmaticsAppointmentId);
-              
-              if (!stillExists) {
-                // Event is gone - deletion confirmed
-                console.log(`[confirm-booking] Lawmatics event ${oldLawmaticsAppointmentId} deletion verified (not found)`);
-              } else {
-                // Step 3: Event still exists - Lawmatics likely soft-deleted or DELETE failed
-                console.log(`[confirm-booking] Lawmatics event ${oldLawmaticsAppointmentId} still exists after DELETE, applying fallback cleanup`);
-                
-                const existingName = typeof stillExists?.name === "string" ? stillExists.name : null;
-                let cleanedName: string;
-                if (existingName) {
-                  const stripped = existingName.replace(/^(Cancelled|Rescheduled)\s*-\s*/i, "").trim();
-                  cleanedName = `[DELETED] Rescheduled - ${stripped}`;
-                } else {
-                  cleanedName = "[DELETED] Rescheduled appointment";
-                }
-
-                const fallbackPayload: Record<string, unknown> = {
-                  status: "cancelled",
-                  name: cleanedName,
-                };
-
-                const fallbackUpdate = await lawmaticsUpdateEvent(accessToken, oldLawmaticsAppointmentId, "PATCH", fallbackPayload);
-                
-                if (fallbackUpdate.ok) {
-                  response.warnings!.push("Previous Lawmatics appointment was marked as cancelled/rescheduled (soft-delete).");
-                } else {
-                  // Try minimal fallback - just the name
-                  const minimalUpdate = await lawmaticsUpdateEvent(accessToken, oldLawmaticsAppointmentId, "PATCH", { name: cleanedName });
-                  if (minimalUpdate.ok) {
-                    response.warnings!.push("Previous Lawmatics appointment was renamed to indicate removal.");
-                  } else {
-                    response.warnings!.push(`Failed to cleanup old Lawmatics appointment ${oldLawmaticsAppointmentId}.`);
-                  }
-                }
-              }
-
-              // Clear the old appointment ID from the meeting so we create a fresh one
-              await supabase
-                .from("meetings")
-                .update({ lawmatics_appointment_id: null })
-                .eq("id", meeting.id);
-            } catch (deleteErr) {
-              const errMsg = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
-              console.error(`[confirm-booking] Lawmatics delete error (non-blocking):`, errMsg);
-              response.warnings!.push(`Failed to delete old Lawmatics appointment: ${errMsg}`);
-            }
-          }
-          // === END RESCHEDULE CLEANUP ===
 
           const client = meeting.external_attendees?.[0];
           const clientEmail = pickString(client?.email);
@@ -1043,6 +1003,78 @@ serve(async (req) => {
                   .from("meetings")
                   .update({ lawmatics_appointment_id: lawmaticsAppointmentId })
                   .eq("id", meeting.id);
+
+                // Now that the new appointment exists, cleanup the old one (reschedule only)
+                if (
+                  isReschedule &&
+                  oldLawmaticsAppointmentId &&
+                  oldLawmaticsAppointmentId !== lawmaticsAppointmentId
+                ) {
+                  console.log(
+                    `[confirm-booking] Reschedule cleanup (post-create) - deleting old Lawmatics appointment: ${oldLawmaticsAppointmentId}`
+                  );
+                  try {
+                    const deleteResult = await lawmaticsDeleteEvent(accessToken, oldLawmaticsAppointmentId);
+                    console.log(
+                      `[confirm-booking] Lawmatics DELETE result for ${oldLawmaticsAppointmentId}:`,
+                      deleteResult
+                    );
+
+                    const stillExists = await lawmaticsReadEvent(accessToken, oldLawmaticsAppointmentId);
+
+                    if (!stillExists) {
+                      console.log(
+                        `[confirm-booking] Lawmatics event ${oldLawmaticsAppointmentId} deletion verified (not found)`
+                      );
+                    } else {
+                      console.log(
+                        `[confirm-booking] Lawmatics event ${oldLawmaticsAppointmentId} still exists after DELETE, applying fallback cleanup`
+                      );
+
+                      const existingName = typeof stillExists?.name === "string" ? stillExists.name : null;
+                      const cleanedName = existingName
+                        ? `[DELETED] Rescheduled - ${existingName
+                            .replace(/^(Cancelled|Rescheduled)\s*-\s*/i, "")
+                            .trim()}`
+                        : "[DELETED] Rescheduled appointment";
+
+                      const fallbackPayload: Record<string, unknown> = {
+                        status: "cancelled",
+                        name: cleanedName,
+                      };
+
+                      const fallbackUpdate = await lawmaticsUpdateEvent(
+                        accessToken,
+                        oldLawmaticsAppointmentId,
+                        "PATCH",
+                        fallbackPayload
+                      );
+
+                      if (fallbackUpdate.ok) {
+                        response.warnings!.push(
+                          "Previous Lawmatics appointment was marked as cancelled/rescheduled (soft-delete)."
+                        );
+                      } else {
+                        const minimalUpdate = await lawmaticsUpdateEvent(accessToken, oldLawmaticsAppointmentId, "PATCH", {
+                          name: cleanedName,
+                        });
+                        if (minimalUpdate.ok) {
+                          response.warnings!.push(
+                            "Previous Lawmatics appointment was renamed to indicate removal."
+                          );
+                        } else {
+                          response.warnings!.push(
+                            `Failed to cleanup old Lawmatics appointment ${oldLawmaticsAppointmentId}.`
+                          );
+                        }
+                      }
+                    }
+                  } catch (deleteErr) {
+                    const errMsg = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
+                    console.error(`[confirm-booking] Lawmatics delete error (non-blocking):`, errMsg);
+                    response.warnings!.push(`Failed to delete old Lawmatics appointment: ${errMsg}`);
+                  }
+                }
               } else if (appointment.error) {
                 response.warnings!.push(`[lawmatics_event] ${appointment.error}`);
               }
@@ -1071,9 +1103,15 @@ serve(async (req) => {
 
       // === GOOGLE CALENDAR INTEGRATION (wrapped in try/catch) ===
       try {
-        if (isReschedule) {
-          await deleteGoogleEventsForMeeting(supabase, meeting.id, response.warnings!);
-        }
+        // For reschedules, snapshot the old events first so we can delete ONLY the previous ones
+        // after the new booking + event creation succeeds.
+        const { data: oldGoogleEvents } = isReschedule
+          ? await supabase
+              .from("meeting_google_events")
+              .select("user_id, google_calendar_id, google_event_id")
+              .eq("meeting_id", meeting.id)
+          : { data: null };
+
         if (participants.length > 0) {
           console.log("Creating Google Calendar events for participants");
           const googleResponse = await createGoogleCalendarEventsForAllParticipants(
@@ -1086,16 +1124,22 @@ serve(async (req) => {
           );
           googleResults = googleResponse.results;
           googleWarnings = googleResponse.warnings;
-          
+
           for (const gw of googleWarnings) {
             response.warnings!.push(`[google] ${gw}`);
           }
+        }
+
+        // Now that new events have been created, delete the old events (reschedule only)
+        if (isReschedule && oldGoogleEvents && oldGoogleEvents.length > 0) {
+          await deleteGoogleEventsForMeeting(supabase, meeting.id, response.warnings!, oldGoogleEvents);
         }
       } catch (googleErr) {
         const errMsg = googleErr instanceof Error ? googleErr.message : String(googleErr);
         console.error("Google Calendar integration error (non-blocking):", errMsg);
         response.warnings!.push(`[google] ${errMsg}`);
       }
+
 
       // === PERSIST DEBUG INFO (non-blocking) ===
       try {
