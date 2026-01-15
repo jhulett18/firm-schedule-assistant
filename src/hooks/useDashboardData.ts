@@ -99,7 +99,7 @@ export function useDashboardData() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("companies")
-        .select("id, name, owner_id")
+        .select("id, name")
         .single();
       if (error) throw error;
       return data;
