@@ -6,6 +6,8 @@ import {
   lawmaticsFindOrCreateContact,
   lawmaticsCreateMatter,
   lawmaticsUpdateEvent,
+  lawmaticsDeleteEvent,
+  lawmaticsReadEvent,
   pickString,
   pickNumber,
 } from "../_shared/lawmatics.ts";
@@ -545,6 +547,11 @@ serve(async (req) => {
     response.meetingId = meeting.id;
     const timezone = meeting.timezone || "America/New_York";
 
+    // Store original values for reschedule detection (used in Phase 2)
+    const originalMeetingStatus = meeting.status as string;
+    const oldLawmaticsAppointmentId = meeting.lawmatics_appointment_id as string | null;
+    const isReschedule = originalMeetingStatus === "Rescheduled";
+
     // 3. Update meeting with selected slot and set status to Booked
     const { error: updateMeetingError } = await supabase
       .from("meetings")
@@ -692,6 +699,67 @@ serve(async (req) => {
 
         if (lawmaticsConnection?.access_token) {
           const accessToken = lawmaticsConnection.access_token;
+
+          // === RESCHEDULE CLEANUP: Delete old Lawmatics appointment if this is a reschedule ===
+          if (isReschedule && oldLawmaticsAppointmentId) {
+            console.log(`[confirm-booking] Reschedule detected - deleting old Lawmatics appointment: ${oldLawmaticsAppointmentId}`);
+            try {
+              // Step 1: Attempt DELETE
+              const deleteResult = await lawmaticsDeleteEvent(accessToken, oldLawmaticsAppointmentId);
+              console.log(`[confirm-booking] Lawmatics DELETE result for ${oldLawmaticsAppointmentId}:`, deleteResult);
+
+              // Step 2: Verify deletion by attempting to read the event
+              const stillExists = await lawmaticsReadEvent(accessToken, oldLawmaticsAppointmentId);
+              
+              if (!stillExists) {
+                // Event is gone - deletion confirmed
+                console.log(`[confirm-booking] Lawmatics event ${oldLawmaticsAppointmentId} deletion verified (not found)`);
+              } else {
+                // Step 3: Event still exists - Lawmatics likely soft-deleted or DELETE failed
+                console.log(`[confirm-booking] Lawmatics event ${oldLawmaticsAppointmentId} still exists after DELETE, applying fallback cleanup`);
+                
+                const existingName = typeof stillExists?.name === "string" ? stillExists.name : null;
+                let cleanedName: string;
+                if (existingName) {
+                  const stripped = existingName.replace(/^(Cancelled|Rescheduled)\s*-\s*/i, "").trim();
+                  cleanedName = `[DELETED] Rescheduled - ${stripped}`;
+                } else {
+                  cleanedName = "[DELETED] Rescheduled appointment";
+                }
+
+                const fallbackPayload: Record<string, unknown> = {
+                  status: "cancelled",
+                  name: cleanedName,
+                };
+
+                const fallbackUpdate = await lawmaticsUpdateEvent(accessToken, oldLawmaticsAppointmentId, "PATCH", fallbackPayload);
+                
+                if (fallbackUpdate.ok) {
+                  response.warnings!.push("Previous Lawmatics appointment was marked as cancelled/rescheduled (soft-delete).");
+                } else {
+                  // Try minimal fallback - just the name
+                  const minimalUpdate = await lawmaticsUpdateEvent(accessToken, oldLawmaticsAppointmentId, "PATCH", { name: cleanedName });
+                  if (minimalUpdate.ok) {
+                    response.warnings!.push("Previous Lawmatics appointment was renamed to indicate removal.");
+                  } else {
+                    response.warnings!.push(`Failed to cleanup old Lawmatics appointment ${oldLawmaticsAppointmentId}.`);
+                  }
+                }
+              }
+
+              // Clear the old appointment ID from the meeting so we create a fresh one
+              await supabase
+                .from("meetings")
+                .update({ lawmatics_appointment_id: null })
+                .eq("id", meeting.id);
+            } catch (deleteErr) {
+              const errMsg = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
+              console.error(`[confirm-booking] Lawmatics delete error (non-blocking):`, errMsg);
+              response.warnings!.push(`Failed to delete old Lawmatics appointment: ${errMsg}`);
+            }
+          }
+          // === END RESCHEDULE CLEANUP ===
+
           const client = meeting.external_attendees?.[0];
           const clientEmail = pickString(client?.email);
           const clientName = pickString(client?.name) || "Client";
@@ -701,9 +769,11 @@ serve(async (req) => {
           const existingMatterId = bookingRequest.lawmatics_existing_matter_id;
 
           // --- Lawmatics Contact (resolve early for appointment + matter) ---
+          // For reschedules, we cleared the old appointment, so we need a contact for the new one
+          const effectiveHasAppointment = isReschedule ? false : !!meeting.lawmatics_appointment_id;
           const shouldResolveContact =
             !!clientEmail &&
-            (!meeting.lawmatics_appointment_id ||
+            (!effectiveHasAppointment ||
               (!meeting.lawmatics_matter_id && matterMode !== "existing"));
 
           if (shouldResolveContact) {
@@ -858,7 +928,8 @@ serve(async (req) => {
           }
 
           // --- Lawmatics Event/Appointment (created AFTER matter so we can link to it) ---
-          if (!meeting.lawmatics_appointment_id) {
+          // For reschedules, we already deleted the old appointment, so create a new one
+          if (!effectiveHasAppointment) {
             try {
               await writeLog(supabase, meeting.id, runId, "lawmatics_resolve_user_start", "info", "Resolving Lawmatics owner", {});
 
