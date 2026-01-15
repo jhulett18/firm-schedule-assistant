@@ -93,11 +93,11 @@ export function useDashboardData() {
     },
   });
 
-  // Fetch recent meetings - scoped to current user via RLS (created_by_user_id)
+  // Fetch recent meetings created by the current user
   const { data: recentMeetings, isLoading: loadingMeetings } = useQuery({
     queryKey: ["recent-meetings", internalUser?.id],
     queryFn: async () => {
-      // RLS automatically filters to meetings created by the current user
+      // Filter to only show meetings created by the current user
       const { data, error } = await supabase
         .from("meetings")
         .select(`
@@ -111,6 +111,7 @@ export function useDashboardData() {
           meeting_types (name),
           booking_requests (public_token, status)
         `)
+        .eq("created_by_user_id", internalUser!.id)
         .order("created_at", { ascending: false })
         .limit(10);
       if (error) throw error;
