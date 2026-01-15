@@ -423,6 +423,56 @@ async function createGoogleCalendarEventsForAllParticipants(
   return { results, warnings };
 }
 
+async function deleteGoogleEventsForMeeting(
+  supabase: any,
+  meetingId: string,
+  warnings: string[]
+): Promise<void> {
+  const { data: googleEvents } = await supabase
+    .from("meeting_google_events")
+    .select("user_id, google_calendar_id, google_event_id")
+    .eq("meeting_id", meetingId);
+
+  for (const ev of googleEvents || []) {
+    const { data: connection } = await supabase
+      .from("calendar_connections")
+      .select("*")
+      .eq("provider", "google")
+      .eq("user_id", ev.user_id)
+      .maybeSingle();
+
+    if (!connection) {
+      warnings.push(`Google connection missing for user ${ev.user_id}.`);
+      continue;
+    }
+
+    const { accessToken, error: tokenError } = await refreshGoogleTokenIfNeeded(supabase, connection);
+    if (!accessToken) {
+      warnings.push(tokenError || `Google token error for user ${ev.user_id}.`);
+      continue;
+    }
+
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(ev.google_calendar_id)}/events/${encodeURIComponent(ev.google_event_id)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+
+      if (!res.ok && res.status !== 404 && res.status !== 410) {
+        warnings.push(`Google event delete failed for user ${ev.user_id} (${res.status}).`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`Google event delete failed for user ${ev.user_id}: ${msg}`);
+    }
+  }
+
+  await supabase.from("meeting_google_events").delete().eq("meeting_id", meetingId);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -1021,6 +1071,9 @@ serve(async (req) => {
 
       // === GOOGLE CALENDAR INTEGRATION (wrapped in try/catch) ===
       try {
+        if (isReschedule) {
+          await deleteGoogleEventsForMeeting(supabase, meeting.id, response.warnings!);
+        }
         if (participants.length > 0) {
           console.log("Creating Google Calendar events for participants");
           const googleResponse = await createGoogleCalendarEventsForAllParticipants(

@@ -418,10 +418,6 @@ serve(async (req) => {
         });
       }
 
-      // Delete Google events AFTER meeting is marked as Rescheduled
-      await deleteGoogleEvents(supabase, meeting.id, warnings);
-      await supabase.from("meeting_google_events").delete().eq("meeting_id", meeting.id);
-
       await supabase.from("audit_logs").insert({
         action_type: "Rescheduled",
         meeting_id: meeting.id,
