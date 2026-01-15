@@ -49,8 +49,8 @@ const STEPS = [
   { id: "participants", label: "Participants", icon: Users },
   { id: "room", label: "Room", icon: DoorOpen },
   { id: "schedule", label: "Scheduling", icon: Clock },
-  { id: "review", label: "Review", icon: CheckCircle },
   { id: "slots", label: "Select Time", icon: Calendar },
+  { id: "review", label: "Review", icon: CheckCircle },
 ];
 
 interface CompanyMember {
@@ -486,14 +486,14 @@ export function BookClientNowDialog({
   const handleNext = async () => {
     if (!validateStep(currentStep)) return;
 
-    // If moving from Review step to Slot Selection step, create the meeting
-    if (currentStep === 5) {
+    // If moving from Scheduling step to Select Time step, create the meeting
+    if (currentStep === 4) {
       try {
         toast.loading("Creating meeting...");
         const { token } = await createMeetingAndBookingRequest();
         toast.dismiss();
         toast.success("Meeting created! Loading available times...");
-        setCurrentStep(6);
+        setCurrentStep(5);
         await fetchSlots(token);
       } catch (error: any) {
         toast.dismiss();
@@ -508,11 +508,27 @@ export function BookClientNowDialog({
     if (currentStep > 0) {
       // Don't allow going back from success state
       if (isSuccess) return;
-      // Don't allow going back from slots to review (would need to recreate meeting)
-      if (currentStep === 6) {
-        toast.error("Cannot go back after creating meeting. Please close and start over if needed.");
+
+      // If going back from Select Time (step 5), clear created meeting data
+      if (currentStep === 5) {
+        toast.info("Going back will clear the created meeting. You'll need to recreate it.");
+        setCreatedMeetingId(null);
+        setCreatedToken(null);
+        setSlots([]);
+        setSelectedSlot(null);
+        setSlotError(null);
+        setCurrentStep((prev) => prev - 1);
         return;
       }
+
+      // If going back from Review (step 6), clear selected slot
+      if (currentStep === 6) {
+        toast.info("Going back will clear your time selection.");
+        setSelectedSlot(null);
+        setCurrentStep((prev) => prev - 1);
+        return;
+      }
+
       setCurrentStep((prev) => prev - 1);
     }
   };
@@ -1086,79 +1102,8 @@ export function BookClientNowDialog({
                   </>
                 )}
 
-                {/* Step 5: Review */}
+                {/* Step 5: Select Time */}
                 {currentStep === 5 && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-sm text-muted-foreground">Client</p>
-                        <p className="font-medium">{formData.clientName}</p>
-                        <p className="text-sm text-muted-foreground">{formData.clientEmail}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-muted-foreground">Meeting Type</p>
-                        <p className="font-medium">
-                          {selectedMeetingType?.name || "General Meeting"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-muted-foreground">Duration</p>
-                        <p className="font-medium">{formData.duration} minutes</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-muted-foreground">Location</p>
-                        <p className="font-medium">
-                          {formData.locationMode === "Zoom" ? "Video Call" : "In-Person"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-muted-foreground">Host / Organizer</p>
-                        <p className="font-medium">{hostMember?.name}</p>
-                        <p className="text-xs text-muted-foreground">{hostMember?.email}</p>
-                      </div>
-                      {selectedParticipants.length > 0 && (
-                        <div>
-                          <p className="text-sm text-muted-foreground">Participants</p>
-                          <p className="font-medium">{selectedParticipants.map(p => p.name).join(", ")}</p>
-                        </div>
-                      )}
-                      {formData.roomId && formData.locationMode === "InPerson" && (
-                        <div>
-                          <p className="text-sm text-muted-foreground">Room</p>
-                          <p className="font-medium">
-                            {rooms?.find((r) => r.id === formData.roomId)?.name}
-                          </p>
-                        </div>
-                      )}
-                      <div>
-                        <p className="text-sm text-muted-foreground">Search Window</p>
-                        <p className="font-medium">{formData.searchWindowDays} days</p>
-                      </div>
-                    </div>
-
-                    {participantsWithoutGoogle.length > 0 && (
-                      <div className="flex items-start gap-2 p-3 rounded-md bg-status-warning/10 border border-status-warning/30">
-                        <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
-                        <div className="text-sm">
-                          <p className="text-muted-foreground">
-                            Some participants don't have Google Calendar connected. Their availability won't be checked.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="bg-muted rounded-lg p-4 text-sm">
-                      <p className="font-medium text-foreground mb-1">What happens next?</p>
-                      <p className="text-muted-foreground">
-                        After you proceed, we'll create the meeting and show you available times.
-                        You can then select a time and book the appointment immediately.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Step 6: Slot Selection */}
-                {currentStep === 6 && (
                   <>
                     {slotError && (
                       <Alert variant="destructive">
@@ -1235,12 +1180,95 @@ export function BookClientNowDialog({
                     ) : null}
                   </>
                 )}
+
+                {/* Step 6: Review */}
+                {currentStep === 6 && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Client</p>
+                        <p className="font-medium">{formData.clientName}</p>
+                        <p className="text-sm text-muted-foreground">{formData.clientEmail}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Meeting Type</p>
+                        <p className="font-medium">
+                          {selectedMeetingType?.name || "General Meeting"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Duration</p>
+                        <p className="font-medium">{formData.duration} minutes</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Location</p>
+                        <p className="font-medium">
+                          {formData.locationMode === "Zoom" ? "Video Call" : "In-Person"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Host / Organizer</p>
+                        <p className="font-medium">{hostMember?.name}</p>
+                        <p className="text-xs text-muted-foreground">{hostMember?.email}</p>
+                      </div>
+                      {selectedParticipants.length > 0 && (
+                        <div>
+                          <p className="text-sm text-muted-foreground">Participants</p>
+                          <p className="font-medium">{selectedParticipants.map(p => p.name).join(", ")}</p>
+                        </div>
+                      )}
+                      {formData.roomId && formData.locationMode === "InPerson" && (
+                        <div>
+                          <p className="text-sm text-muted-foreground">Room</p>
+                          <p className="font-medium">
+                            {rooms?.find((r) => r.id === formData.roomId)?.name}
+                          </p>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-sm text-muted-foreground">Search Window</p>
+                        <p className="font-medium">{formData.searchWindowDays} days</p>
+                      </div>
+                    </div>
+
+                    {/* Selected Time Slot */}
+                    {selectedSlot && (
+                      <div className="border rounded-lg p-4 bg-primary/5">
+                        <p className="text-sm font-medium mb-2">Selected Time</p>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-4 w-4 text-primary" />
+                          <span className="font-medium">
+                            {format(new Date(selectedSlot.start), "EEEE, MMMM d 'at' h:mm a")}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {participantsWithoutGoogle.length > 0 && (
+                      <div className="flex items-start gap-2 p-3 rounded-md bg-status-warning/10 border border-status-warning/30">
+                        <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
+                        <div className="text-sm">
+                          <p className="text-muted-foreground">
+                            Some participants don't have Google Calendar connected. Their availability won't be checked.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="bg-muted rounded-lg p-4 text-sm">
+                      <p className="font-medium text-foreground mb-1">Ready to confirm?</p>
+                      <p className="text-muted-foreground">
+                        Review your selections above and click "Confirm Booking" to schedule the appointment.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             </ScrollArea>
 
             {/* Navigation buttons */}
             <div className="flex justify-between mt-4 pt-4 border-t">
-              {currentStep === 6 ? (
+              {currentStep === 5 ? (
                 <Button
                   variant="outline"
                   onClick={() => fetchSlots(createdToken!)}
@@ -1257,10 +1285,19 @@ export function BookClientNowDialog({
                 </Button>
               )}
 
-              {currentStep === 6 ? (
+              {currentStep === 5 ? (
+                <Button
+                  onClick={handleNext}
+                  disabled={!selectedSlot}
+                  className="flex-1 ml-2"
+                >
+                  Next (Review)
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              ) : currentStep === 6 ? (
                 <Button
                   onClick={handleConfirm}
-                  disabled={!selectedSlot || isConfirming}
+                  disabled={isConfirming}
                   className="flex-1 ml-2"
                 >
                   {isConfirming ? (
@@ -1274,7 +1311,7 @@ export function BookClientNowDialog({
                 </Button>
               ) : (
                 <Button onClick={handleNext}>
-                  {currentStep === 5 ? "Show Available Times" : "Next"}
+                  {currentStep === 4 ? "Show Available Times" : "Next"}
                   <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               )}
