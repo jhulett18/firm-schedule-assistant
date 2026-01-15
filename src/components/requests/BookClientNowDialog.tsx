@@ -633,7 +633,7 @@ export function BookClientNowDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-2xl h-[90vh] max-h-[90vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Book Client Now</DialogTitle>
           <DialogDescription>
@@ -770,8 +770,8 @@ export function BookClientNowDialog({
         ) : (
           <>
             {/* Wizard Steps */}
-            <ScrollArea className="flex-1 pr-4">
-              <div className="space-y-4">
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="space-y-4 pr-4">
                 {/* Step 0: Client Details */}
                 {currentStep === 0 && (
                   <>
