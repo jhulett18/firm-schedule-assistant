@@ -123,20 +123,21 @@ serve(async (req) => {
 
     // 5. Determine state
     let state: PublicBookingInfoResponse["state"] = "needs_scheduling";
+    const isExpired = new Date(bookingRequest.expires_at) < new Date() || bookingRequest.status === "Expired";
 
+    // Check if cancelled
+    if (meeting.status === "Cancelled") {
+      state = "cancelled";
+    }
+    // Check if expired
+    else if (isExpired) {
+      state = "expired";
+    }
     // Check if already booked
-    if (bookingRequest.status === "Completed" || meeting.status === "Booked") {
+    else if (bookingRequest.status === "Completed" || meeting.status === "Booked") {
       state = "already_booked";
       safeMeeting.startDatetime = meeting.start_datetime || undefined;
       safeMeeting.endDatetime = meeting.end_datetime || undefined;
-    }
-    // Check if expired
-    else if (new Date(bookingRequest.expires_at) < new Date() || bookingRequest.status === "Expired") {
-      state = "expired";
-    }
-    // Check if cancelled
-    else if (meeting.status === "Cancelled") {
-      state = "cancelled";
     }
 
     console.log("Returning booking info with state:", state);

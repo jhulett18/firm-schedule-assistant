@@ -72,6 +72,28 @@ paths:
         "404": { $ref: "#/components/responses/ErrorResponse" }
         "500": { $ref: "#/components/responses/ErrorResponse" }
 
+  /manage-booking:
+    post:
+      tags: [Public, Booking]
+      summary: Reschedule or cancel a booking
+      description: Public token-based manage actions. See `supabase/functions/manage-booking/index.ts`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManageBookingRequest"
+      responses:
+        "200":
+          description: Manage booking response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManageBookingResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
   /confirm-booking-staff:
     post:
       tags: [Booking]
@@ -845,6 +867,32 @@ components:
         slots:
           type: array
           items: { $ref: "#/components/schemas/TimeSlot" }
+      additionalProperties: true
+
+    ManageBookingRequest:
+      type: object
+      properties:
+        token: { type: string }
+        action:
+          type: string
+          enum: [reschedule, cancel]
+      required: [token, action]
+
+    ManageBookingResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        action: { type: string }
+        meetingId: { type: string }
+        bookingRequestId: { type: string }
+        meetingStatus: { type: string }
+        bookingStatus: { type: string }
+        expiresAt: { type: string, format: date-time }
+        warnings:
+          type: array
+          items: { type: string }
+        error: { type: string }
+      required: [success]
       additionalProperties: true
 
     PublicBookingInfoRequest:
