@@ -95,16 +95,18 @@ export function useDashboardData() {
 
   // Fetch user's company info
   const { data: company, isLoading: loadingCompany } = useQuery({
-    queryKey: ["user-company", internalUser?.id],
+    queryKey: ["user-company", internalUser?.company_id],
     queryFn: async () => {
+      if (!internalUser?.company_id) return null;
       const { data, error } = await supabase
         .from("companies")
         .select("id, name")
+        .eq("id", internalUser.company_id)
         .single();
       if (error) throw error;
       return data;
     },
-    enabled: !!internalUser?.id,
+    enabled: !!internalUser?.company_id,
   });
 
   // Fetch recent meetings created by the current user
