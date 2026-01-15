@@ -72,6 +72,32 @@ paths:
         "404": { $ref: "#/components/responses/ErrorResponse" }
         "500": { $ref: "#/components/responses/ErrorResponse" }
 
+  /confirm-booking-staff:
+    post:
+      tags: [Booking]
+      summary: Confirm a booking as staff
+      description: Admin-only; resolves booking token by meetingId and delegates to confirm-booking. See `supabase/functions/confirm-booking-staff/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmBookingStaffRequest"
+      responses:
+        "200":
+          description: Confirmation response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmBookingResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
   /confirm-test-booking:
     post:
       tags: [Booking]
@@ -662,6 +688,14 @@ components:
         startDatetime: { type: string, format: date-time }
         endDatetime: { type: string, format: date-time }
       required: [token, startDatetime, endDatetime]
+
+    ConfirmBookingStaffRequest:
+      type: object
+      properties:
+        meetingId: { type: string }
+        startDatetime: { type: string, format: date-time }
+        endDatetime: { type: string, format: date-time }
+      required: [meetingId, startDatetime, endDatetime]
 
     ConfirmBookingResponse:
       type: object

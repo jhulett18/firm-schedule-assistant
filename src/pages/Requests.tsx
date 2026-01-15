@@ -508,7 +508,6 @@ export default function Requests() {
       <BookClientNowDialog
         open={bookNowDialogOpen}
         onOpenChange={setBookNowDialogOpen}
-        meeting={bookNowMeeting}
         onSuccess={handleBookNowSuccess}
       />
     </MainLayout>

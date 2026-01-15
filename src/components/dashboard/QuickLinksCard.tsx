@@ -126,7 +126,6 @@ export function QuickLinksCard() {
       <BookClientNowDialog
         open={bookNowDialogOpen}
         onOpenChange={setBookNowDialogOpen}
-        meeting={bookableMeeting || null}
         onSuccess={() => refetch()}
       />
     </>
