@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { lawmaticsDeleteEvent, lawmaticsReadEvent, lawmaticsUpdateEvent } from "../_shared/lawmatics.ts";
+import { lawmaticsReadEvent, lawmaticsUpdateEvent } from "../_shared/lawmatics.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -140,80 +140,6 @@ async function cancelLawmaticsAppointment(
   }
 
   warnings.push(`Lawmatics update failed for appointment ${appointmentId}.`);
-}
-
-async function deleteLawmaticsAppointment(
-  supabase: any,
-  appointmentId: string | null,
-  warnings: string[]
-): Promise<{ clearAppointmentId: boolean }> {
-  if (!appointmentId) return { clearAppointmentId: false };
-
-  const { data: lawmaticsConnection } = await supabase
-    .from("lawmatics_connections")
-    .select("access_token")
-    .order("connected_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (!lawmaticsConnection?.access_token) {
-    warnings.push("Lawmatics not connected; appointment was not deleted.");
-    return { clearAppointmentId: false };
-  }
-
-  const accessToken = lawmaticsConnection.access_token;
-  
-  // Step 1: Attempt DELETE
-  const deleteResult = await lawmaticsDeleteEvent(accessToken, appointmentId);
-  console.log(`[manage-booking] Lawmatics DELETE result for ${appointmentId}:`, deleteResult);
-
-  // Step 2: Verify deletion by attempting to read the event
-  const stillExists = await lawmaticsReadEvent(accessToken, appointmentId);
-  
-  if (!stillExists) {
-    // Event is gone - deletion confirmed
-    console.log(`[manage-booking] Lawmatics event ${appointmentId} deletion verified (not found)`);
-    return { clearAppointmentId: true };
-  }
-
-  // Step 3: Event still exists - Lawmatics likely soft-deleted or DELETE failed
-  console.log(`[manage-booking] Lawmatics event ${appointmentId} still exists after DELETE, applying fallback cleanup`);
-  
-  // Read existing name to build "Rescheduled -" prefix
-  const existingName = typeof stillExists?.name === "string" ? stillExists.name : null;
-  
-  // Build the new name - mark as rescheduled and removed
-  let cleanedName: string;
-  if (existingName) {
-    // Strip any existing "Cancelled -" or "Rescheduled -" prefix
-    const stripped = existingName.replace(/^(Cancelled|Rescheduled)\s*-\s*/i, "").trim();
-    cleanedName = `[DELETED] Rescheduled - ${stripped}`;
-  } else {
-    cleanedName = "[DELETED] Rescheduled appointment";
-  }
-
-  // Apply fallback: mark as cancelled with clear naming
-  const fallbackPayload: Record<string, unknown> = {
-    status: "cancelled",
-    name: cleanedName,
-  };
-
-  const fallbackUpdate = await lawmaticsUpdateEvent(accessToken, appointmentId, "PATCH", fallbackPayload);
-  
-  if (fallbackUpdate.ok) {
-    warnings.push("Lawmatics does not support hard delete; the previous appointment was marked as cancelled/rescheduled.");
-    return { clearAppointmentId: true };
-  }
-
-  // Try minimal fallback - just the name
-  const minimalUpdate = await lawmaticsUpdateEvent(accessToken, appointmentId, "PATCH", { name: cleanedName });
-  if (minimalUpdate.ok) {
-    warnings.push("Lawmatics does not support hard delete; the previous appointment was renamed to indicate removal.");
-    return { clearAppointmentId: true };
-  }
-
-  warnings.push(`Lawmatics delete and fallback cleanup failed for appointment ${appointmentId}.`);
-  return { clearAppointmentId: false };
 }
 
 async function deleteGoogleEvents(
@@ -462,18 +388,13 @@ serve(async (req) => {
       const clampedExpiresDays = Math.max(1, expiresDays);
       const newExpiresAt = new Date(Date.now() + clampedExpiresDays * 24 * 60 * 60 * 1000).toISOString();
 
-      const { clearAppointmentId } = await deleteLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings) || {
-        clearAppointmentId: false,
-      };
-
-      // Update meeting - clear lawmatics_appointment_id when deletion/cleanup succeeded
+      // Update meeting - keep lawmatics_appointment_id so confirm-booking can delete it after new time is confirmed
       const { error: meetingUpdateError } = await supabase
         .from("meetings")
         .update({
           status: "Rescheduled",
           start_datetime: null,
           end_datetime: null,
-          ...(clearAppointmentId ? { lawmatics_appointment_id: null } : {}),
           updated_at: new Date().toISOString(),
         })
         .eq("id", meeting.id);
