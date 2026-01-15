@@ -424,43 +424,26 @@ export function BookClientNowDialog({
   };
 
   const handleConfirm = async () => {
-    if (!selectedSlot || !createdMeetingId) return;
+    if (!selectedSlot || !createdToken) return;
 
     setIsConfirming(true);
     setSlotError(null);
     setWarnings([]);
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
+      const { data, error } = await supabase.functions.invoke("confirm-booking", {
+        body: {
+          token: createdToken,
+          startDatetime: selectedSlot.start,
+          endDatetime: selectedSlot.end,
+        },
+      });
 
-      if (!accessToken) {
-        throw new Error("You must be logged in to book on behalf of a client");
+      if (error) {
+        throw new Error(error.message || "Failed to confirm booking");
       }
 
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/confirm-booking-staff`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({
-            meetingId: createdMeetingId,
-            startDatetime: selectedSlot.start,
-            endDatetime: selectedSlot.end,
-          }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `Request failed with status ${response.status}`);
-      }
-
-      if (data.success === true) {
+      if (data?.success === true) {
         if (Array.isArray(data.warnings) && data.warnings.length > 0) {
           setWarnings(data.warnings);
         }
@@ -470,7 +453,7 @@ export function BookClientNowDialog({
         queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
         queryClient.invalidateQueries({ queryKey: ["recent-meetings"] });
         onSuccess?.();
-      } else if (data.error) {
+      } else if (data?.error) {
         throw new Error(data.error);
       } else {
         throw new Error("Unexpected response from server");
