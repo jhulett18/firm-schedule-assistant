@@ -33,6 +33,7 @@ interface AlreadyBookedStateProps {
   onCancelled?: () => void;
 }
 
+/** Displays confirmation state with manage appointment options */
 export function AlreadyBookedState({
   meetingTypeName,
   startDatetime,
