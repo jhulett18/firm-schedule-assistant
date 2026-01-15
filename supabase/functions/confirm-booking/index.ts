@@ -339,35 +339,46 @@ async function createGoogleCalendarEventForUser(
 }
 
 // Create Google Calendar events for ALL participants with idempotency
+// options.forceCreate: When true, bypasses idempotency check (used for reschedules)
 async function createGoogleCalendarEventsForAllParticipants(
   supabase: any,
   meeting: MeetingDetails,
   participants: Array<{ id: string; email: string }>,
   hostAttorney: { name: string; email: string } | null,
   startDatetime: string,
-  endDatetime: string
+  endDatetime: string,
+  options?: { forceCreate?: boolean }
 ): Promise<{ results: GoogleEventResult[]; warnings: string[] }> {
   const results: GoogleEventResult[] = [];
   const warnings: string[] = [];
   const allParticipantEmails = participants.map(p => p.email).filter(Boolean);
+  const forceCreate = options?.forceCreate ?? false;
+
+  console.log(`[createGoogleCalendarEventsForAllParticipants] forceCreate=${forceCreate}, participants=${participants.length}`);
 
   try {
-    // Check for existing events for this meeting (idempotency)
-    const { data: existingEvents } = await supabase
-      .from("meeting_google_events")
-      .select("user_id, google_calendar_id, google_event_id")
-      .eq("meeting_id", meeting.id);
+    // Check for existing events for this meeting (idempotency) - skip check if forceCreate
+    let existingByUser = new Map<string, { calendar_id: string; event_id: string }>();
+    
+    if (!forceCreate) {
+      const { data: existingEvents } = await supabase
+        .from("meeting_google_events")
+        .select("user_id, google_calendar_id, google_event_id")
+        .eq("meeting_id", meeting.id);
 
-    const existingByUser = new Map<string, { calendar_id: string; event_id: string }>();
-    for (const ev of existingEvents || []) {
-      existingByUser.set(ev.user_id, { 
-        calendar_id: ev.google_calendar_id, 
-        event_id: ev.google_event_id 
-      });
+      for (const ev of existingEvents || []) {
+        existingByUser.set(ev.user_id, { 
+          calendar_id: ev.google_calendar_id, 
+          event_id: ev.google_event_id 
+        });
+      }
+      console.log(`[createGoogleCalendarEventsForAllParticipants] Found ${existingByUser.size} existing events`);
+    } else {
+      console.log(`[createGoogleCalendarEventsForAllParticipants] Bypassing idempotency check (forceCreate=true)`);
     }
 
     for (const participant of participants) {
-      // Check idempotency - skip if event already exists for this user
+      // Check idempotency - skip if event already exists for this user (unless forceCreate)
       const existing = existingByUser.get(participant.id);
       if (existing) {
         console.log(`Google event already exists for user ${participant.id}, skipping`);
@@ -407,6 +418,7 @@ async function createGoogleCalendarEventsForAllParticipants(
               google_calendar_id: result.calendar_id,
               google_event_id: result.event_id,
             });
+          console.log(`[createGoogleCalendarEventsForAllParticipants] Persisted new event for user ${participant.id}`);
         } catch (insertErr) {
           console.error(`Failed to persist Google event for user ${participant.id}:`, insertErr);
         }
@@ -419,6 +431,10 @@ async function createGoogleCalendarEventsForAllParticipants(
     console.error("createGoogleCalendarEventsForAllParticipants error:", errMsg);
     warnings.push(`Google Calendar batch error: ${errMsg}`);
   }
+
+  const createdCount = results.filter(r => r.created).length;
+  const skippedCount = results.filter(r => r.skipped).length;
+  console.log(`[createGoogleCalendarEventsForAllParticipants] Done: created=${createdCount}, skipped=${skippedCount}`);
 
   return { results, warnings };
 }
@@ -1105,6 +1121,8 @@ serve(async (req) => {
       try {
         // For reschedules, snapshot the old events first so we can delete ONLY the previous ones
         // after the new booking + event creation succeeds.
+        console.log(`[confirm-booking] Google Calendar integration: isReschedule=${isReschedule}`);
+        
         const { data: oldGoogleEvents } = isReschedule
           ? await supabase
               .from("meeting_google_events")
@@ -1112,15 +1130,22 @@ serve(async (req) => {
               .eq("meeting_id", meeting.id)
           : { data: null };
 
+        if (isReschedule && oldGoogleEvents) {
+          console.log(`[confirm-booking] Reschedule: found ${oldGoogleEvents.length} old Google events to cleanup after new creation`);
+        }
+
         if (participants.length > 0) {
-          console.log("Creating Google Calendar events for participants");
+          console.log(`[confirm-booking] Creating Google Calendar events for ${participants.length} participants`);
+          
+          // For reschedules, force creation of new events (bypass idempotency check)
           const googleResponse = await createGoogleCalendarEventsForAllParticipants(
             supabase,
             meeting as unknown as MeetingDetails,
             participants,
             hostAttorney,
             startDatetime,
-            endDatetime
+            endDatetime,
+            { forceCreate: isReschedule } // Bypass idempotency for reschedules
           );
           googleResults = googleResponse.results;
           googleWarnings = googleResponse.warnings;
@@ -1131,8 +1156,16 @@ serve(async (req) => {
         }
 
         // Now that new events have been created, delete the old events (reschedule only)
+        // Only cleanup if we actually created at least one new event
+        const newEventsCreated = googleResults.filter(r => r.created).length;
         if (isReschedule && oldGoogleEvents && oldGoogleEvents.length > 0) {
-          await deleteGoogleEventsForMeeting(supabase, meeting.id, response.warnings!, oldGoogleEvents);
+          if (newEventsCreated > 0) {
+            console.log(`[confirm-booking] Reschedule cleanup: deleting ${oldGoogleEvents.length} old Google events (${newEventsCreated} new events created)`);
+            await deleteGoogleEventsForMeeting(supabase, meeting.id, response.warnings!, oldGoogleEvents);
+          } else {
+            console.warn(`[confirm-booking] Reschedule: No new Google events created, keeping old events to prevent data loss`);
+            response.warnings!.push("Reschedule: new Google events were not created; keeping previous Google events to prevent data loss.");
+          }
         }
       } catch (googleErr) {
         const errMsg = googleErr instanceof Error ? googleErr.message : String(googleErr);
