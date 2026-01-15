@@ -1,6 +1,9 @@
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { CheckCircle, XCircle, AlertCircle, ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { SystemStatus } from "@/hooks/useDashboardData";
 
 interface SystemStatusCardProps {
@@ -9,6 +12,7 @@ interface SystemStatusCardProps {
 }
 
 export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
+  const [isOpen, setIsOpen] = useState(true);
 
   if (isLoading) {
     return (
@@ -56,48 +60,62 @@ export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
 
   return (
     <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg">System Status</CardTitle>
-          {hasIssues ? (
-            <Badge variant="destructive" className="gap-1">
-              <AlertCircle className="w-3 h-3" />
-              Action Required
-            </Badge>
-          ) : (
-            <Badge className="bg-status-success text-white gap-1">
-              <CheckCircle className="w-3 h-3" />
-              Ready
-            </Badge>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          {items.map((item) => (
-            <div key={item.label} className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">{item.label}</span>
-              {item.connected ? (
-                <div className="flex items-center gap-2">
-                  {item.count !== undefined && (
-                    <span className="text-sm font-medium">{item.count} active</span>
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        <CollapsibleTrigger asChild>
+          <CardHeader className="pb-3 cursor-pointer hover:bg-muted/50 transition-colors rounded-t-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-lg">System Status</CardTitle>
+                <ChevronDown
+                  className={cn(
+                    "w-4 h-4 text-muted-foreground transition-transform",
+                    isOpen && "rotate-180"
                   )}
-                  <CheckCircle className="w-4 h-4 text-status-success" />
-                </div>
+                />
+              </div>
+              {hasIssues ? (
+                <Badge variant="destructive" className="gap-1">
+                  <AlertCircle className="w-3 h-3" />
+                  Action Required
+                </Badge>
               ) : (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">Not configured</span>
-                  {item.required ? (
-                    <XCircle className="w-4 h-4 text-destructive" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-status-warning" />
-                  )}
-                </div>
+                <Badge className="bg-status-success text-white gap-1">
+                  <CheckCircle className="w-3 h-3" />
+                  Ready
+                </Badge>
               )}
             </div>
-          ))}
-        </div>
-      </CardContent>
+          </CardHeader>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <CardContent>
+            <div className="space-y-3">
+              {items.map((item) => (
+                <div key={item.label} className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">{item.label}</span>
+                  {item.connected ? (
+                    <div className="flex items-center gap-2">
+                      {item.count !== undefined && (
+                        <span className="text-sm font-medium">{item.count} active</span>
+                      )}
+                      <CheckCircle className="w-4 h-4 text-status-success" />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">Not configured</span>
+                      {item.required ? (
+                        <XCircle className="w-4 h-4 text-destructive" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-status-warning" />
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </CollapsibleContent>
+      </Collapsible>
     </Card>
   );
 }
