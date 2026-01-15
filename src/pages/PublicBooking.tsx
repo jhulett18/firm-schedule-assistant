@@ -346,6 +346,9 @@ export default function PublicBooking() {
 
   // Handle reschedule - transition back to scheduling mode
   const handleReschedule = () => {
+    // Clear selected slot and update meeting status locally
+    setSelectedSlot(null);
+    setMeeting(prev => prev ? { ...prev, status: "Rescheduled", start_datetime: null, end_datetime: null } : null);
     setCurrentState("needs_scheduling");
     fetchAvailableSlots();
   };
