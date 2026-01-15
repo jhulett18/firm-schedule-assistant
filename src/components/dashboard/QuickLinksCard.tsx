@@ -51,7 +51,7 @@ export function QuickLinksCard() {
             {/* Book Client Now - always shown, wizard handles everything */}
             <Button
               variant="outline"
-              className="justify-start gap-2 h-auto py-3 bg-primary/10 hover:bg-primary/20 border-primary/20"
+              className="justify-start gap-2 h-auto py-3 bg-accent/10 hover:bg-accent/20 border-accent/30"
               onClick={() => setBookNowDialogOpen(true)}
             >
               <CalendarCheck className="w-4 h-4" />
