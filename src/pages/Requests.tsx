@@ -31,7 +31,6 @@ import {
 import { toast } from "sonner";
 import { format } from "date-fns";
 import {
-  Plus,
   Inbox,
   Copy,
   Mail,
@@ -41,9 +40,12 @@ import {
   Clock,
   MapPin,
   Video,
-  ArrowRight,
   CalendarCheck,
+  Search,
+  Download,
+  Trash2,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { copyToClipboard, getBookingUrl, generateClientEmailTemplate } from "@/lib/clipboard";
 import { BookClientNowDialog } from "@/components/requests/BookClientNowDialog";
 import type { Json } from "@/integrations/supabase/types";
@@ -92,6 +94,8 @@ export default function Requests() {
   const [cancelMeeting, setCancelMeeting] = useState<Meeting | null>(null);
   const [bookNowDialogOpen, setBookNowDialogOpen] = useState(false);
   const [bookNowMeeting, setBookNowMeeting] = useState<Meeting | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false);
 
   // Check for detail view from URL
   const detailId = searchParams.get("id");
@@ -139,6 +143,75 @@ export default function Requests() {
       toast.error(`Failed to cancel: ${error.message}`);
     },
   });
+
+  const clearAllMutation = useMutation({
+    mutationFn: async () => {
+      // Delete all meetings for the current user (RLS will scope this)
+      const { error } = await supabase
+        .from("meetings")
+        .delete()
+        .neq("id", "00000000-0000-0000-0000-000000000000"); // Delete all (RLS scopes to user)
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["recent-meetings"] });
+      toast.success("All requests cleared");
+      setClearAllDialogOpen(false);
+    },
+    onError: (error) => {
+      toast.error(`Failed to clear requests: ${error.message}`);
+    },
+  });
+
+  // Filter meetings based on search query
+  const filteredMeetings = meetings?.filter((meeting) => {
+    if (!searchQuery.trim()) return true;
+    const query = searchQuery.toLowerCase();
+    const client = getClientInfo(meeting.external_attendees);
+    const dateStr = format(new Date(meeting.created_at), "MMM d yyyy").toLowerCase();
+    return (
+      client.name.toLowerCase().includes(query) ||
+      client.email.toLowerCase().includes(query) ||
+      dateStr.includes(query)
+    );
+  });
+
+  // Download all history as CSV
+  const handleDownloadHistory = () => {
+    if (!meetings || meetings.length === 0) {
+      toast.error("No requests to download");
+      return;
+    }
+
+    const headers = ["Client Name", "Client Email", "Meeting Type", "Duration", "Location", "Status", "Created", "Scheduled Time"];
+    const rows = meetings.map((meeting) => {
+      const client = getClientInfo(meeting.external_attendees);
+      return [
+        client.name,
+        client.email,
+        meeting.meeting_types?.name || "",
+        `${meeting.duration_minutes} min`,
+        meeting.location_mode,
+        meeting.status,
+        format(new Date(meeting.created_at), "yyyy-MM-dd HH:mm"),
+        meeting.start_datetime ? format(new Date(meeting.start_datetime), "yyyy-MM-dd HH:mm") : "",
+      ];
+    });
+
+    const csvContent = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `booking-requests-${format(new Date(), "yyyy-MM-dd")}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success("History downloaded");
+  };
 
   const handleCopyLink = (meeting: Meeting) => {
     const token = meeting.booking_requests?.[0]?.public_token;
@@ -291,10 +364,27 @@ export default function Requests() {
             <h1 className="text-2xl font-serif font-bold text-foreground">Booking Requests</h1>
             <p className="text-muted-foreground">Track and manage client scheduling links</p>
           </div>
-          <Button onClick={() => navigate("/requests/new")}>
-            <Plus className="w-4 h-4 mr-2" />
-            New Request
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handleDownloadHistory} disabled={!meetings || meetings.length === 0}>
+              <Download className="w-4 h-4 mr-2" />
+              Download History
+            </Button>
+            <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setClearAllDialogOpen(true)} disabled={!meetings || meetings.length === 0}>
+              <Trash2 className="w-4 h-4 mr-2" />
+              Clear All
+            </Button>
+          </div>
+        </div>
+
+        {/* Search/Filter */}
+        <div className="relative max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by name, email, or date..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+          />
         </div>
 
         {isLoading ? (
@@ -307,20 +397,19 @@ export default function Requests() {
               </div>
             </CardContent>
           </Card>
-        ) : meetings && meetings.length === 0 ? (
+        ) : filteredMeetings && filteredMeetings.length === 0 ? (
           <Card>
             <CardContent className="py-12">
               <div className="flex flex-col items-center text-center">
                 <Inbox className="w-16 h-16 text-muted-foreground/50 mb-4" />
-                <h3 className="text-xl font-semibold mb-2">No booking requests yet</h3>
-                <p className="text-muted-foreground mb-6 max-w-md">
-                  When you create a booking request, you'll get a unique link to send to your client. 
-                  They can then pick a time that works for everyone.
+                <h3 className="text-xl font-semibold mb-2">
+                  {searchQuery ? "No matching requests" : "No booking requests yet"}
+                </h3>
+                <p className="text-muted-foreground max-w-md">
+                  {searchQuery
+                    ? "Try adjusting your search terms to find what you're looking for."
+                    : "When you create a booking request, you'll get a unique link to send to your client."}
                 </p>
-                <Button onClick={() => navigate("/requests/new")} size="lg">
-                  <Plus className="w-5 h-5 mr-2" />
-                  Create Your First Request
-                </Button>
               </div>
             </CardContent>
           </Card>
@@ -340,7 +429,7 @@ export default function Requests() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {meetings?.map((meeting) => {
+                  {filteredMeetings?.map((meeting) => {
                     const client = getClientInfo(meeting.external_attendees);
                     const hasToken = meeting.booking_requests?.[0]?.public_token;
 
@@ -510,6 +599,30 @@ export default function Requests() {
         onOpenChange={setBookNowDialogOpen}
         onSuccess={handleBookNowSuccess}
       />
+
+      {/* Clear All Confirmation Dialog */}
+      <Dialog open={clearAllDialogOpen} onOpenChange={setClearAllDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear All Requests?</DialogTitle>
+            <DialogDescription>
+              This will permanently delete all your booking requests. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearAllDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => clearAllMutation.mutate()}
+              disabled={clearAllMutation.isPending}
+            >
+              {clearAllMutation.isPending ? "Clearing..." : "Clear All Requests"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </MainLayout>
   );
 }
