@@ -106,7 +106,7 @@ interface DaySlot {
 }
 
 export function GoogleCalendarConnections() {
-  const { isAdmin, internalUser } = useAuth();
+  const { internalUser } = useAuth();
   const queryClient = useQueryClient();
   const [isConnecting, setIsConnecting] = useState(false);
   const [viewingCalendars, setViewingCalendars] = useState<string | null>(null);
@@ -154,9 +154,9 @@ export function GoogleCalendarConnections() {
     };
   } | null>(null);
 
-  // Fetch all calendar connections (admin sees all, staff sees own)
+  // Fetch user's own calendar connection
   const { data: connections, isLoading: loadingConnections } = useQuery({
-    queryKey: ["google-calendar-connections", isAdmin],
+    queryKey: ["google-calendar-connections", internalUser?.id],
     queryFn: async () => {
       let query = supabase
         .from("calendar_connections")
@@ -175,7 +175,7 @@ export function GoogleCalendarConnections() {
         .eq("provider", "google")
         .order("created_at", { ascending: false });
 
-      if (!isAdmin && internalUser?.id) {
+      if (internalUser?.id) {
         query = query.eq("user_id", internalUser.id);
       }
 
@@ -201,7 +201,7 @@ export function GoogleCalendarConnections() {
       return data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["google-calendar-connections", isAdmin] });
+      queryClient.invalidateQueries({ queryKey: ["google-calendar-connections", internalUser?.id] });
       if (data.verified_ok) {
         toast.success("Google Calendar verified successfully");
       } else {
