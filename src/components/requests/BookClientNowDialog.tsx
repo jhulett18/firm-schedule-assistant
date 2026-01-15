@@ -38,7 +38,21 @@ import {
   AlertTriangle,
   MapPin,
   Video,
+  XCircle,
+  Copy,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { copyToClipboard, getBookingUrl } from "@/lib/clipboard";
 import { format, addDays } from "date-fns";
 import { toast } from "sonner";
 
@@ -140,6 +154,8 @@ export function BookClientNowDialog({
   const [slotError, setSlotError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isRescheduling, setIsRescheduling] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [clientTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York"
   );
@@ -519,6 +535,84 @@ export function BookClientNowDialog({
     onOpenChange(false);
   };
 
+  const handleCopyLink = () => {
+    if (createdToken) {
+      const url = getBookingUrl(createdToken);
+      copyToClipboard(url, "Booking link copied!");
+    }
+  };
+
+  const handleReschedule = async () => {
+    if (!createdToken) return;
+    
+    setIsRescheduling(true);
+    setWarnings([]);
+
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-booking", {
+        body: { token: createdToken, action: "reschedule" },
+      });
+
+      if (error) {
+        throw new Error(error.message || "Failed to initiate reschedule");
+      }
+
+      if (data?.success) {
+        if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+          setWarnings(data.warnings);
+        }
+        // Go back to slot selection
+        setIsSuccess(false);
+        setSelectedSlot(null);
+        setCurrentStep(5);
+        toast.success("Reschedule initiated. Select a new time.");
+        await fetchSlots(createdToken);
+        queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+      } else if (data?.error) {
+        throw new Error(data.error);
+      }
+    } catch (err: any) {
+      console.error("Reschedule error:", err);
+      toast.error(err.message || "Unable to reschedule");
+    } finally {
+      setIsRescheduling(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!createdToken) return;
+    
+    setIsCancelling(true);
+    setWarnings([]);
+
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-booking", {
+        body: { token: createdToken, action: "cancel" },
+      });
+
+      if (error) {
+        throw new Error(error.message || "Failed to cancel booking");
+      }
+
+      if (data?.success) {
+        if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+          setWarnings(data.warnings);
+        }
+        toast.success("Appointment cancelled");
+        queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+        queryClient.invalidateQueries({ queryKey: ["recent-meetings"] });
+        handleClose();
+      } else if (data?.error) {
+        throw new Error(data.error);
+      }
+    } catch (err: any) {
+      console.error("Cancel error:", err);
+      toast.error(err.message || "Unable to cancel");
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   const updateForm = (updates: Partial<FormData>) => {
     setFormData((prev) => ({ ...prev, ...updates }));
     setErrors({});
@@ -607,7 +701,69 @@ export function BookClientNowDialog({
               </Alert>
             )}
 
-            <Button onClick={handleClose} className="mt-2">
+            {/* Manage Appointment Section */}
+            <div className="w-full max-w-sm space-y-2 mt-2">
+              <p className="text-sm font-medium text-center text-muted-foreground">Manage Appointment</p>
+              
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={handleCopyLink}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy booking link
+              </Button>
+
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={handleReschedule}
+                disabled={isRescheduling || isCancelling}
+              >
+                {isRescheduling ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Reschedule appointment
+              </Button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start text-destructive hover:text-destructive"
+                    disabled={isRescheduling || isCancelling}
+                  >
+                    {isCancelling ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <XCircle className="h-4 w-4 mr-2" />
+                    )}
+                    Cancel appointment
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Cancel Appointment?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to cancel this appointment{selectedSlot ? ` scheduled for ${format(new Date(selectedSlot.start), "EEEE, MMMM d 'at' h:mm a")}` : ""}? This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep Appointment</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleCancel}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      Yes, Cancel
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+
+            <Button onClick={handleClose} className="mt-4">
               Done
             </Button>
           </div>
