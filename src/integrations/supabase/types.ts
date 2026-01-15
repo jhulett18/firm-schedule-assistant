@@ -504,6 +504,54 @@ export type Database = {
           },
         ]
       }
+      notifications: {
+        Row: {
+          created_at: string
+          id: string
+          meeting_id: string | null
+          message: string
+          read: boolean
+          title: string
+          type: Database["public"]["Enums"]["notification_type"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          meeting_id?: string | null
+          message: string
+          read?: boolean
+          title: string
+          type: Database["public"]["Enums"]["notification_type"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          meeting_id?: string | null
+          message?: string
+          read?: boolean
+          title?: string
+          type?: Database["public"]["Enums"]["notification_type"]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_meeting_id_fkey"
+            columns: ["meeting_id"]
+            isOneToOne: false
+            referencedRelation: "meetings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pairing_presets: {
         Row: {
           active: boolean
@@ -834,6 +882,11 @@ export type Database = {
         | "Rescheduled"
         | "Cancelled"
         | "Failed"
+      notification_type:
+        | "meeting_cancelled"
+        | "meeting_rescheduled"
+        | "booking_completed"
+        | "system"
       time_of_day_preference:
         | "Morning"
         | "Midday"
@@ -991,6 +1044,12 @@ export const Constants = {
         "Rescheduled",
         "Cancelled",
         "Failed",
+      ],
+      notification_type: [
+        "meeting_cancelled",
+        "meeting_rescheduled",
+        "booking_completed",
+        "system",
       ],
       time_of_day_preference: [
         "Morning",
