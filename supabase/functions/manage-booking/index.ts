@@ -102,7 +102,7 @@ async function cancelLawmaticsAppointment(
   appointmentId: string | null,
   warnings: string[]
 ): Promise<void> {
-  if (!appointmentId) return { clearAppointmentId: false };
+  if (!appointmentId) return;
 
   const { data: lawmaticsConnection } = await supabase
     .from("lawmatics_connections")
@@ -147,7 +147,7 @@ async function deleteLawmaticsAppointment(
   appointmentId: string | null,
   warnings: string[]
 ): Promise<{ clearAppointmentId: boolean }> {
-  if (!appointmentId) return;
+  if (!appointmentId) return { clearAppointmentId: false };
 
   const { data: lawmaticsConnection } = await supabase
     .from("lawmatics_connections")

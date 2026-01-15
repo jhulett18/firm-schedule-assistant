@@ -1,3 +1,4 @@
+/** Book Client Now Dialog - Staff booking workflow */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
