@@ -9,6 +9,7 @@ interface InternalUser {
   email: string;
   role: 'Attorney' | 'SupportStaff' | 'Admin';
   active: boolean;
+  company_id: string;
   timezone_default: string;
   weekends_allowed_default: boolean;
   default_search_window_days: number;
