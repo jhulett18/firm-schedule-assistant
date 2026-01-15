@@ -494,7 +494,7 @@ export function BookClientNowDialog({
         toast.loading("Creating meeting...");
         const { token } = await createMeetingAndBookingRequest();
         toast.dismiss();
-        toast.success("Meeting created! Loading available times...");
+        // Transition to loading state without toast - UI shows "Loading availability times..."
         setCurrentStep(5);
         await fetchSlots(token);
       } catch (error: any) {
@@ -561,11 +561,10 @@ export function BookClientNowDialog({
         if (Array.isArray(data.warnings) && data.warnings.length > 0) {
           setWarnings(data.warnings);
         }
-        // Go back to slot selection
+        // Go back to slot selection - no toast, UI shows "Loading availability times..."
         setIsSuccess(false);
         setSelectedSlot(null);
         setCurrentStep(5);
-        toast.success("Reschedule initiated. Select a new time.");
         await fetchSlots(createdToken);
         queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
       } else if (data?.error) {
@@ -1272,11 +1271,17 @@ export function BookClientNowDialog({
                     )}
 
                     {isLoadingSlots ? (
-                      <div className="space-y-3 py-4">
-                        <Skeleton className="h-12 w-full" />
-                        <Skeleton className="h-12 w-full" />
-                        <Skeleton className="h-12 w-full" />
-                        <Skeleton className="h-12 w-full" />
+                      <div className="space-y-4 py-8">
+                        <div className="flex flex-col items-center gap-3 text-center">
+                          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          <p className="font-medium text-foreground">Loading availability times...</p>
+                          <p className="text-sm text-muted-foreground">Checking calendars for open slots</p>
+                        </div>
+                        <div className="space-y-3">
+                          <Skeleton className="h-12 w-full" />
+                          <Skeleton className="h-12 w-full" />
+                          <Skeleton className="h-12 w-full" />
+                        </div>
                       </div>
                     ) : slots.length > 0 ? (
                       <>
