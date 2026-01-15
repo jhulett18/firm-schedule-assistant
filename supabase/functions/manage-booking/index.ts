@@ -447,9 +447,6 @@ serve(async (req) => {
     }
 
     if (action === "reschedule") {
-      await deleteLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings);
-      await deleteGoogleEvents(supabase, meeting.id, warnings);
-
       // Fetch full meeting data for notification
       const { data: fullMeeting } = await supabase
         .from("meetings")
@@ -462,13 +459,14 @@ serve(async (req) => {
       const clampedExpiresDays = Math.max(1, expiresDays);
       const newExpiresAt = new Date(Date.now() + clampedExpiresDays * 24 * 60 * 60 * 1000).toISOString();
 
+      // Update meeting - keep lawmatics_appointment_id so confirm-booking can delete it later
       const { error: meetingUpdateError } = await supabase
         .from("meetings")
         .update({
           status: "Rescheduled",
           start_datetime: null,
           end_datetime: null,
-          lawmatics_appointment_id: null,
+          // NOTE: lawmatics_appointment_id is kept - will be deleted when new booking is confirmed
           updated_at: new Date().toISOString(),
         })
         .eq("id", meeting.id);
@@ -492,6 +490,8 @@ serve(async (req) => {
         });
       }
 
+      // Delete Google events AFTER meeting is marked as Rescheduled
+      await deleteGoogleEvents(supabase, meeting.id, warnings);
       await supabase.from("meeting_google_events").delete().eq("meeting_id", meeting.id);
 
       await supabase.from("audit_logs").insert({
