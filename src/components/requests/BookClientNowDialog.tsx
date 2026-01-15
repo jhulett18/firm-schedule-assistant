@@ -486,7 +486,7 @@ export function BookClientNowDialog({
   const handleNext = async () => {
     if (!validateStep(currentStep)) return;
 
-    // If moving from Scheduling step to Select Time step, create the meeting
+    // If moving from Scheduling step (4) to Slots step (5), create the meeting and fetch slots
     if (currentStep === 4) {
       try {
         toast.loading("Creating meeting...");
@@ -499,6 +499,13 @@ export function BookClientNowDialog({
         toast.dismiss();
         toast.error(`Failed to create meeting: ${error.message}`);
       }
+    } else if (currentStep === 5) {
+      // Moving from Slots to Review - must have a selected slot
+      if (!selectedSlot) {
+        toast.error("Please select a time slot");
+        return;
+      }
+      setCurrentStep(6);
     } else {
       setCurrentStep((prev) => prev + 1);
     }
@@ -508,27 +515,16 @@ export function BookClientNowDialog({
     if (currentStep > 0) {
       // Don't allow going back from success state
       if (isSuccess) return;
-
-      // If going back from Select Time (step 5), clear created meeting data
+      // Don't allow going back from slots step (would need to recreate meeting)
       if (currentStep === 5) {
-        toast.info("Going back will clear the created meeting. You'll need to recreate it.");
-        setCreatedMeetingId(null);
-        setCreatedToken(null);
-        setSlots([]);
-        setSelectedSlot(null);
-        setSlotError(null);
-        setCurrentStep((prev) => prev - 1);
+        toast.error("Cannot go back after creating meeting. Please close and start over if needed.");
         return;
       }
-
-      // If going back from Review (step 6), clear selected slot
+      // Allow going back from review to slots to pick a different time
       if (currentStep === 6) {
-        toast.info("Going back will clear your time selection.");
-        setSelectedSlot(null);
-        setCurrentStep((prev) => prev - 1);
+        setCurrentStep(5);
         return;
       }
-
       setCurrentStep((prev) => prev - 1);
     }
   };
