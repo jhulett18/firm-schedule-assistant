@@ -162,9 +162,54 @@ async function deleteLawmaticsAppointment(
   }
 
   const accessToken = lawmaticsConnection.access_token;
-  const deleted = await lawmaticsDeleteEvent(accessToken, appointmentId);
-  if (!deleted) {
-    warnings.push(`Lawmatics delete failed for appointment ${appointmentId}.`);
+  
+  // Step 1: Attempt DELETE
+  const deleteResult = await lawmaticsDeleteEvent(accessToken, appointmentId);
+  console.log(`[manage-booking] Lawmatics DELETE result for ${appointmentId}:`, deleteResult);
+
+  // Step 2: Verify deletion by attempting to read the event
+  const stillExists = await lawmaticsReadEvent(accessToken, appointmentId);
+  
+  if (!stillExists) {
+    // Event is gone - deletion confirmed
+    console.log(`[manage-booking] Lawmatics event ${appointmentId} deletion verified (not found)`);
+    return;
+  }
+
+  // Step 3: Event still exists - Lawmatics likely soft-deleted or DELETE failed
+  console.log(`[manage-booking] Lawmatics event ${appointmentId} still exists after DELETE, applying fallback cleanup`);
+  
+  // Read existing name to build "Rescheduled -" prefix
+  const existingName = typeof stillExists?.name === "string" ? stillExists.name : null;
+  
+  // Build the new name - mark as rescheduled and removed
+  let cleanedName: string;
+  if (existingName) {
+    // Strip any existing "Cancelled -" or "Rescheduled -" prefix
+    const stripped = existingName.replace(/^(Cancelled|Rescheduled)\s*-\s*/i, "").trim();
+    cleanedName = `[DELETED] Rescheduled - ${stripped}`;
+  } else {
+    cleanedName = "[DELETED] Rescheduled appointment";
+  }
+
+  // Apply fallback: mark as cancelled with clear naming
+  const fallbackPayload: Record<string, unknown> = {
+    status: "cancelled",
+    name: cleanedName,
+  };
+
+  const fallbackUpdate = await lawmaticsUpdateEvent(accessToken, appointmentId, "PATCH", fallbackPayload);
+  
+  if (fallbackUpdate.ok) {
+    warnings.push("Lawmatics does not support hard delete; the previous appointment was marked as cancelled/rescheduled.");
+  } else {
+    // Try minimal fallback - just the name
+    const minimalUpdate = await lawmaticsUpdateEvent(accessToken, appointmentId, "PATCH", { name: cleanedName });
+    if (minimalUpdate.ok) {
+      warnings.push("Lawmatics does not support hard delete; the previous appointment was renamed to indicate removal.");
+    } else {
+      warnings.push(`Lawmatics delete and fallback cleanup failed for appointment ${appointmentId}.`);
+    }
   }
 }
 

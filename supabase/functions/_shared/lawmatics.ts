@@ -955,14 +955,21 @@ export async function lawmaticsUpdateEvent(
 }
 
 /**
- * Delete an event.
+ * Delete an event. Returns diagnostics for debugging.
  */
-export async function lawmaticsDeleteEvent(accessToken: string, eventId: string): Promise<boolean> {
+export async function lawmaticsDeleteEvent(
+  accessToken: string,
+  eventId: string
+): Promise<{ ok: boolean; status: number; excerpt: string }> {
   try {
     const res = await lawmaticsFetch(accessToken, "DELETE", `/v1/events/${encodeURIComponent(eventId)}`);
-    return res.ok;
-  } catch {
-    return false;
+    const { ok, status, excerpt } = await lawmaticsJson(res);
+    console.log(`[Lawmatics] DELETE /v1/events/${eventId} => ${status} ok=${ok}`);
+    return { ok, status, excerpt };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[Lawmatics] DELETE exception for event ${eventId}:`, msg);
+    return { ok: false, status: 0, excerpt: msg };
   }
 }
 
