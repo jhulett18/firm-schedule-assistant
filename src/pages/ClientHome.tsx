@@ -5,7 +5,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
@@ -24,7 +23,7 @@ import {
   MousePointerClick,
   CheckCircle2
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { AlreadyBookedState } from '@/components/public-booking/AlreadyBookedState';
 
 const ACTIVE_BOOKING_TOKEN_KEY = 'ACTIVE_BOOKING_TOKEN';
 
@@ -180,42 +179,21 @@ export default function ClientHome() {
           /* Has Active Token */
           <div className="space-y-6">
             {bookingInfo.state === "already_booked" && bookingInfo.meeting ? (
-              /* Already Booked State */
-              <Card className="border-green-200 bg-green-50/50">
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2 text-green-700">
-                    <CheckCircle2 className="w-5 h-5" />
-                    Your Appointment is Confirmed
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex items-center gap-2 text-sm">
-                    <Calendar className="w-4 h-4 text-muted-foreground" />
-                    {bookingInfo.meeting.startDatetime && (
-                      <span>{format(new Date(bookingInfo.meeting.startDatetime), 'EEEE, MMMM d, yyyy')}</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    <Clock className="w-4 h-4 text-muted-foreground" />
-                    {bookingInfo.meeting.startDatetime && (
-                      <span>
-                        {format(new Date(bookingInfo.meeting.startDatetime), 'h:mm a')} ({bookingInfo.meeting.durationMinutes} min)
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    {bookingInfo.meeting.locationMode === 'Zoom' ? (
-                      <Video className="w-4 h-4 text-muted-foreground" />
-                    ) : (
-                      <Building2 className="w-4 h-4 text-muted-foreground" />
-                    )}
-                    <span>{getLocationDisplay(bookingInfo.meeting.locationMode)}</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-2">
-                    {bookingInfo.meeting.meetingTypeName}
-                  </p>
-                </CardContent>
-              </Card>
+              /* Already Booked State - using AlreadyBookedState component */
+              <AlreadyBookedState
+                meetingTypeName={bookingInfo.meeting.meetingTypeName}
+                startDatetime={new Date(bookingInfo.meeting.startDatetime!)}
+                durationMinutes={bookingInfo.meeting.durationMinutes}
+                locationMode={bookingInfo.meeting.locationMode}
+                locationDisplay={getLocationDisplay(bookingInfo.meeting.locationMode)}
+                contactEmail={bookingInfo.contact?.email}
+                contactPhone={bookingInfo.contact?.phone}
+                token={activeToken || undefined}
+                onReschedule={() => navigate('/schedule')}
+                onCancelled={() => {
+                  setBookingInfo({ ...bookingInfo, state: "cancelled" });
+                }}
+              />
             ) : bookingInfo.state === "needs_scheduling" && bookingInfo.meeting ? (
               /* Needs Scheduling State */
               <>
