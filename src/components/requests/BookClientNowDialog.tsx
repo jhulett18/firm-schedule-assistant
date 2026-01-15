@@ -83,6 +83,7 @@ interface FormData {
   allowWeekends: boolean;
   timePreference: string;
   minNoticeHours: number;
+  bookingRequestExpiresDays: number;
   lawmaticsMatterMode: "new" | "existing";
   lawmaticsExistingMatterId: string;
 }
@@ -113,6 +114,7 @@ const initialFormData: FormData = {
   allowWeekends: false,
   timePreference: "None",
   minNoticeHours: 24,
+  bookingRequestExpiresDays: 7,
   lawmaticsMatterMode: "new",
   lawmaticsExistingMatterId: "",
 };
@@ -354,6 +356,7 @@ export function BookClientNowDialog({
           preferences: {
             timeOfDay: formData.timePreference,
             minNoticeHours: formData.minNoticeHours,
+            bookingRequestExpiresDays: formData.bookingRequestExpiresDays,
             allowWeekends: formData.allowWeekends,
           },
           search_window_days_used: formData.searchWindowDays,
@@ -365,8 +368,8 @@ export function BookClientNowDialog({
 
       if (meetingError) throw meetingError;
 
-      // Create booking request
-      const expiresAt = addDays(new Date(), 7);
+      // Create booking request with custom expiration days
+      const expiresAt = addDays(new Date(), formData.bookingRequestExpiresDays);
       const { data: bookingRequest, error: brError } = await supabase
         .from("booking_requests")
         .insert({
@@ -1066,6 +1069,27 @@ export function BookClientNowDialog({
                       </Select>
                       <p className="text-sm text-muted-foreground mt-1">
                         Minimum time before a slot becomes available
+                      </p>
+                    </div>
+                    <div>
+                      <Label>Booking Link Expires In</Label>
+                      <Select
+                        value={formData.bookingRequestExpiresDays.toString()}
+                        onValueChange={(v) => updateForm({ bookingRequestExpiresDays: parseInt(v) })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="3">3 days</SelectItem>
+                          <SelectItem value="5">5 days</SelectItem>
+                          <SelectItem value="7">7 days</SelectItem>
+                          <SelectItem value="14">14 days</SelectItem>
+                          <SelectItem value="30">30 days</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        How long the client has to complete booking
                       </p>
                     </div>
                     <div className="flex items-center space-x-2">

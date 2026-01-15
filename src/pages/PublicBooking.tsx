@@ -344,6 +344,18 @@ export default function PublicBooking() {
     );
   }
 
+  // Handle reschedule - transition back to scheduling mode
+  const handleReschedule = () => {
+    setCurrentState("needs_scheduling");
+    fetchAvailableSlots();
+  };
+
+  // Handle cancelled - show expired/cancelled state
+  const handleCancelled = () => {
+    setExpiredReason("cancelled");
+    setCurrentState("expired_or_cancelled");
+  };
+
   if (currentState === "already_booked" && meeting) {
     const startDate = meeting.start_datetime ? new Date(meeting.start_datetime) : new Date();
     return (
@@ -355,6 +367,9 @@ export default function PublicBooking() {
         locationDisplay={getLocationDisplay()}
         contactEmail={contactSettings.email}
         contactPhone={contactSettings.phone}
+        token={token}
+        onReschedule={handleReschedule}
+        onCancelled={handleCancelled}
       />
     );
   }
