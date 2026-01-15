@@ -95,7 +95,7 @@ export function QuickLinksCard() {
             {bookableMeeting && (
               <Button
                 variant="outline"
-                className="justify-start gap-2 h-auto py-3"
+                className="justify-start gap-2 h-auto py-3 bg-primary/10 hover:bg-primary/20 border-primary/20"
                 onClick={() => setBookNowDialogOpen(true)}
               >
                 <CalendarCheck className="w-4 h-4" />
