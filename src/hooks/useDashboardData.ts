@@ -93,6 +93,20 @@ export function useDashboardData() {
     },
   });
 
+  // Fetch user's company info
+  const { data: company, isLoading: loadingCompany } = useQuery({
+    queryKey: ["user-company", internalUser?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("companies")
+        .select("id, name, owner_id")
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!internalUser?.id,
+  });
+
   // Fetch recent meetings created by the current user
   const { data: recentMeetings, isLoading: loadingMeetings } = useQuery({
     queryKey: ["recent-meetings", internalUser?.id],
@@ -218,6 +232,7 @@ export function useDashboardData() {
     loadingRooms ||
     loadingMeetingTypes ||
     loadingPresets ||
+    loadingCompany ||
     loadingMeetings;
 
   return {
@@ -226,6 +241,7 @@ export function useDashboardData() {
     progressPercent,
     nextAction: getNextAction(),
     recentMeetings: recentMeetings || [],
+    company: company || null,
     isLoading,
   };
 }

@@ -9,7 +9,7 @@ import { HowItWorks } from "@/components/dashboard/HowItWorks";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { TestMyBookingWizard } from "@/components/admin/TestMyBookingWizard";
 import { Button } from "@/components/ui/button";
-import { TestTube } from "lucide-react";
+import { TestTube, Building2, CheckCircle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Dashboard() {
@@ -23,6 +23,7 @@ export default function Dashboard() {
     progressPercent,
     nextAction,
     recentMeetings,
+    company,
     isLoading: dataLoading,
   } = useDashboardData();
 
@@ -49,6 +50,18 @@ export default function Dashboard() {
 
         {/* Test Booking Wizard */}
         <TestMyBookingWizard open={showTestWizard} onOpenChange={setShowTestWizard} />
+
+        {/* Company Status Banner */}
+        {company && systemStatus.lawmaticsConnected && (
+          <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg p-4 flex items-center gap-3">
+            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-green-100 dark:bg-green-900">
+              <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+            </div>
+            <p className="text-green-800 dark:text-green-200 text-sm">
+              Your firm <strong>{company.name}</strong> is connected to Lawmatics
+            </p>
+          </div>
+        )}
 
         {/* Top cards grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
