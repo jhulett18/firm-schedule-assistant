@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { lawmaticsReadEvent, lawmaticsUpdateEvent } from "../_shared/lawmatics.ts";
+import { lawmaticsDeleteEvent, lawmaticsReadEvent, lawmaticsUpdateEvent } from "../_shared/lawmatics.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -140,6 +140,32 @@ async function cancelLawmaticsAppointment(
   }
 
   warnings.push(`Lawmatics update failed for appointment ${appointmentId}.`);
+}
+
+async function deleteLawmaticsAppointment(
+  supabase: any,
+  appointmentId: string | null,
+  warnings: string[]
+): Promise<void> {
+  if (!appointmentId) return;
+
+  const { data: lawmaticsConnection } = await supabase
+    .from("lawmatics_connections")
+    .select("access_token")
+    .order("connected_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!lawmaticsConnection?.access_token) {
+    warnings.push("Lawmatics not connected; appointment was not deleted.");
+    return;
+  }
+
+  const accessToken = lawmaticsConnection.access_token;
+  const deleted = await lawmaticsDeleteEvent(accessToken, appointmentId);
+  if (!deleted) {
+    warnings.push(`Lawmatics delete failed for appointment ${appointmentId}.`);
+  }
 }
 
 async function cancelGoogleEvents(
@@ -302,7 +328,7 @@ serve(async (req) => {
     }
 
     if (action === "reschedule") {
-      await cancelLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings);
+      await deleteLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings);
       await cancelGoogleEvents(supabase, meeting.id, warnings);
 
       // Fetch full meeting data for notification
