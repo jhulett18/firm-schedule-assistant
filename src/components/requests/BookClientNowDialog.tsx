@@ -155,6 +155,7 @@ export function BookClientNowDialog({
   const [slotError, setSlotError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isCancelSuccess, setIsCancelSuccess] = useState(false);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [clientTimezone] = useState(
@@ -181,6 +182,7 @@ export function BookClientNowDialog({
       setSlotError(null);
       setWarnings([]);
       setIsSuccess(false);
+      setIsCancelSuccess(false);
       setExistingMatters([]);
       setMatterLookupDone(false);
       setLastLookedUpEmail("");
@@ -597,11 +599,19 @@ export function BookClientNowDialog({
       if (data?.success) {
         if (Array.isArray(data.warnings) && data.warnings.length > 0) {
           setWarnings(data.warnings);
+          // Show warning toast if there are calendar warnings
+          toast.success("Appointment cancelled", {
+            description: "Some calendar updates may require attention. Check warnings below.",
+          });
+        } else {
+          // Clean cancellation with calendar events deleted
+          toast.success("Appointment cancelled", {
+            description: "All calendar events have been removed.",
+          });
         }
-        toast.success("Appointment cancelled");
+        setIsCancelSuccess(true);
         queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
         queryClient.invalidateQueries({ queryKey: ["recent-meetings"] });
-        handleClose();
       } else if (data?.error) {
         throw new Error(data.error);
       }
@@ -672,8 +682,40 @@ export function BookClientNowDialog({
           </div>
         )}
 
-        {/* Success State */}
-        {isSuccess ? (
+        {/* Cancel Success State */}
+        {isCancelSuccess ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 py-8">
+            <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center">
+              <XCircle className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-lg font-semibold">Appointment Cancelled</h3>
+              <p className="text-muted-foreground text-sm">
+                The appointment and calendar events have been removed.
+              </p>
+            </div>
+
+            {warnings.length > 0 && (
+              <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/20 max-w-sm">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertDescription>
+                  <p className="font-medium text-amber-800 dark:text-amber-200 mb-1 text-sm">
+                    Some updates require attention:
+                  </p>
+                  <ul className="text-sm text-amber-700 dark:text-amber-300 space-y-1">
+                    {warnings.map((w, i) => (
+                      <li key={i}>• {w}</li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <Button onClick={handleClose} className="mt-4">
+              Close
+            </Button>
+          </div>
+        ) : isSuccess ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 py-8">
             <div className="h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center">
               <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
