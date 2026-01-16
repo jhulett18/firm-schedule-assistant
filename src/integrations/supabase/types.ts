@@ -228,19 +228,36 @@ export type Database = {
         Row: {
           created_at: string
           id: string
+          invite_code: string | null
           name: string
+          owner_id: string | null
+          registration_code: string | null
         }
         Insert: {
           created_at?: string
           id?: string
+          invite_code?: string | null
           name: string
+          owner_id?: string | null
+          registration_code?: string | null
         }
         Update: {
           created_at?: string
           id?: string
+          invite_code?: string | null
           name?: string
+          owner_id?: string | null
+          registration_code?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "companies_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       lawmatics_connections: {
         Row: {
@@ -777,6 +794,9 @@ export type Database = {
       users: {
         Row: {
           active: boolean
+          approved: boolean | null
+          approved_at: string | null
+          approved_by: string | null
           auth_user_id: string | null
           company_id: string
           created_at: string
@@ -796,6 +816,9 @@ export type Database = {
         }
         Insert: {
           active?: boolean
+          approved?: boolean | null
+          approved_at?: string | null
+          approved_by?: string | null
           auth_user_id?: string | null
           company_id?: string
           created_at?: string
@@ -815,6 +838,9 @@ export type Database = {
         }
         Update: {
           active?: boolean
+          approved?: boolean | null
+          approved_at?: string | null
+          approved_by?: string | null
           auth_user_id?: string | null
           company_id?: string
           created_at?: string
@@ -833,6 +859,13 @@ export type Database = {
           zoom_user_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "users_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "users_company_id_fkey"
             columns: ["company_id"]
@@ -893,7 +926,7 @@ export type Database = {
         | "Afternoon"
         | "Evening"
         | "None"
-      user_role: "Attorney" | "SupportStaff" | "Admin"
+      user_role: "Attorney" | "SupportStaff" | "Admin" | "Owner"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1058,7 +1091,7 @@ export const Constants = {
         "Evening",
         "None",
       ],
-      user_role: ["Attorney", "SupportStaff", "Admin"],
+      user_role: ["Attorney", "SupportStaff", "Admin", "Owner"],
     },
   },
 } as const
