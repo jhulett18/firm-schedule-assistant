@@ -64,7 +64,7 @@ export default function AdminUsers() {
     if (error) {
       toast({ title: "Error fetching users", description: error.message, variant: "destructive" });
     } else {
-      setUsers((data as User[]) || []);
+      setUsers((data as unknown as User[]) || []);
     }
     setLoading(false);
   }
@@ -78,7 +78,7 @@ export default function AdminUsers() {
     if (error) {
       console.error("Error fetching company:", error);
     } else {
-      setCompany(data);
+      setCompany(data as unknown as Company);
     }
   }
 
@@ -112,7 +112,7 @@ export default function AdminUsers() {
     if (editingUser) {
       const { error } = await supabase
         .from("users")
-        .update(formData)
+        .update(formData as any)
         .eq("id", editingUser.id);
 
       if (error) {
@@ -123,7 +123,7 @@ export default function AdminUsers() {
         fetchUsers();
       }
     } else {
-      const { error } = await supabase.from("users").insert(formData);
+      const { error } = await supabase.from("users").insert(formData as any);
 
       if (error) {
         toast({ title: "Error creating user", description: error.message, variant: "destructive" });
@@ -142,7 +142,7 @@ export default function AdminUsers() {
         approved: true,
         approved_by: internalUser?.id,
         approved_at: new Date().toISOString(),
-      })
+      } as any)
       .eq("id", userId);
 
     if (error) {

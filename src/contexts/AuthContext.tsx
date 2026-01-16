@@ -70,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Error fetching internal user:', error);
         return null;
       }
-      return data as InternalUser | null;
+      return data as unknown as InternalUser | null;
     } catch (err) {
       console.error('Error in fetchInternalUser:', err);
       return null;
