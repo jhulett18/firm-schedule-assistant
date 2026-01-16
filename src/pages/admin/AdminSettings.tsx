@@ -13,7 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download, Unlink, ExternalLink } from "lucide-react";
+import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download, Unlink, ExternalLink, LogOut, Trash2 } from "lucide-react";
+import { DeleteAccountDialog } from "@/components/account/DeleteAccountDialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatDistanceToNow } from "date-fns";
 
@@ -967,6 +968,44 @@ const AdminSettings = () => {
                 </div>
               </>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Account Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Account</CardTitle>
+            <CardDescription>
+              Manage your account and session
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  const { signOut } = await import("@/contexts/AuthContext").then(m => {
+                    // We need to get signOut from the hook context
+                    return { signOut: () => supabase.auth.signOut() };
+                  });
+                  await supabase.auth.signOut();
+                  window.location.href = "/auth";
+                }}
+                className="gap-2"
+              >
+                <LogOut className="w-4 h-4" />
+                Sign Out
+              </Button>
+              
+              <DeleteAccountDialog
+                trigger={
+                  <Button variant="outline" className="gap-2 text-destructive hover:text-destructive border-destructive/50 hover:border-destructive hover:bg-destructive/10">
+                    <Trash2 className="w-4 h-4" />
+                    Delete My Account
+                  </Button>
+                }
+              />
+            </div>
           </CardContent>
         </Card>
       </div>
