@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { CheckCircle, XCircle, Link2, RefreshCw, Settings2, Phone, Mail, MessageSquare, Building2, TestTube, Save, Download, Unlink, ExternalLink } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { formatDistanceToNow } from "date-fns";
 
 interface LawmaticsItem {
@@ -32,6 +33,7 @@ const AdminSettings = () => {
   const [isTesting, setIsTesting] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const queryClient = useQueryClient();
+  const { isAdmin } = useAuth();
 
   // Local state for contact fields
   const [contactPhone, setContactPhone] = useState("");
@@ -659,24 +661,26 @@ const AdminSettings = () => {
                       </>
                     )}
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={disconnectLawmatics}
-                    disabled={isDisconnecting || isConnecting}
-                    className="text-destructive hover:text-destructive"
-                  >
-                    {isDisconnecting ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Disconnecting...
-                      </>
-                    ) : (
-                      <>
-                        <Unlink className="h-4 w-4 mr-2" />
-                        Disconnect
-                      </>
-                    )}
-                  </Button>
+                  {isAdmin && (
+                    <Button
+                      variant="outline"
+                      onClick={disconnectLawmatics}
+                      disabled={isDisconnecting || isConnecting}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      {isDisconnecting ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Disconnecting...
+                        </>
+                      ) : (
+                        <>
+                          <Unlink className="h-4 w-4 mr-2" />
+                          Disconnect
+                        </>
+                      )}
+                    </Button>
+                  )}
                 </div>
                 
                 {/* Test Results */}

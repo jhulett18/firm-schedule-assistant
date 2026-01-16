@@ -14,7 +14,7 @@ import { TestTube, Building2, CheckCircle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Dashboard() {
-  const { userRole } = useAuth();
+  const { userRole, internalUser } = useAuth();
   const [showTestWizard, setShowTestWizard] = useState(false);
   const isAdmin = userRole === "admin";
   
@@ -37,6 +37,11 @@ export default function Dashboard() {
             <h1 className="text-3xl font-serif font-bold text-foreground">
               Welcome to LawScheduler
             </h1>
+            {internalUser?.name && (
+              <p className="text-sm text-muted-foreground mt-1">
+                Signed in as <strong className="text-foreground">{internalUser.name}</strong>
+              </p>
+            )}
             <p className="text-muted-foreground mt-1">
               Send scheduling links to clients without managing dozens of Lawmatics schedulers.
             </p>

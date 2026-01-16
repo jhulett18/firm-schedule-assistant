@@ -47,7 +47,7 @@ export default function AdminUsers() {
     timezone_default: "America/New_York",
   });
   const { toast } = useToast();
-  const { internalUser } = useAuth();
+  const { internalUser, isAdmin } = useAuth();
 
   useEffect(() => {
     fetchUsers();
@@ -179,8 +179,8 @@ export default function AdminUsers() {
   return (
     <AdminLayout>
       <div className="space-y-6">
-        {/* Company Codes Section */}
-        {company && (
+        {/* Company Codes Section - Admin only */}
+        {isAdmin && company && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -232,8 +232,8 @@ export default function AdminUsers() {
           </Card>
         )}
 
-        {/* Pending Approvals Section */}
-        {pendingUsers.length > 0 && (
+        {/* Pending Approvals Section - Admin only */}
+        {isAdmin && pendingUsers.length > 0 && (
           <Card className="border-amber-200 dark:border-amber-800">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-400">

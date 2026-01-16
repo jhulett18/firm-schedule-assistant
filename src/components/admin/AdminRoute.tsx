@@ -8,7 +8,7 @@ interface AdminRouteProps {
 }
 
 export function AdminRoute({ children }: AdminRouteProps) {
-  const { user, isAdmin, isLoading, rolesLoaded, isDevMode } = useAuth();
+  const { user, isAdmin, isLoading, rolesLoaded, isDevMode, internalUser } = useAuth();
   const { toast } = useToast();
   const hasShownErrorRef = useRef(false);
 
@@ -31,8 +31,8 @@ export function AdminRoute({ children }: AdminRouteProps) {
     return <>{children}</>;
   }
 
-  // User exists, roles loaded, but not admin
-  if (rolesLoaded && !isAdmin) {
+  // User exists, roles loaded, but not admin or owner
+  if (rolesLoaded && !isAdmin && internalUser?.role !== 'Owner') {
     if (!hasShownErrorRef.current) {
       hasShownErrorRef.current = true;
       setTimeout(() => {
