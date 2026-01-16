@@ -34,6 +34,7 @@ interface AuthContextType {
   isAdmin: boolean;
   isStaff: boolean;
   isClient: boolean;
+  isSuperuser: boolean;
   userRole: 'admin' | 'staff' | 'client' | null;
   isLoading: boolean;
   rolesLoaded: boolean;
@@ -53,6 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isStaff, setIsStaff] = useState(false);
   const [isClient, setIsClient] = useState(false);
+  const [isSuperuser, setIsSuperuser] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'staff' | 'client' | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [rolesLoaded, setRolesLoaded] = useState(false);
@@ -101,6 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const hasAdmin = roles.includes('admin');
     const hasStaff = roles.includes('staff');
     const hasClient = roles.includes('client');
+    const hasSuperuser = roles.includes('superuser');
 
     // Compute role hierarchy: admin > staff > client
     const computedIsAdmin = hasAdmin;
@@ -116,11 +119,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       computedRole = 'client';
     }
 
-    console.log('Computed roles - isAdmin:', computedIsAdmin, 'isStaff:', computedIsStaff, 'isClient:', computedIsClient, 'userRole:', computedRole);
+    console.log('Computed roles - isAdmin:', computedIsAdmin, 'isStaff:', computedIsStaff, 'isClient:', computedIsClient, 'isSuperuser:', hasSuperuser, 'userRole:', computedRole);
 
     setIsAdmin(computedIsAdmin);
     setIsStaff(computedIsStaff);
     setIsClient(computedIsClient);
+    setIsSuperuser(hasSuperuser);
     setUserRole(computedRole);
     setRolesLoaded(true);
   };
@@ -146,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsAdmin(false);
     setIsStaff(false);
     setIsClient(false);
+    setIsSuperuser(false);
     setUserRole(null);
     setRolesLoaded(false);
     setIsDevMode(false);
@@ -249,6 +254,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsAdmin(true);
     setIsStaff(true);
     setIsClient(false);
+    setIsSuperuser(false);
     setUserRole('admin');
     setRolesLoaded(true);
     setIsDevMode(true);
@@ -264,6 +270,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAdmin,
         isStaff,
         isClient,
+        isSuperuser,
         userRole,
         isLoading,
         rolesLoaded,

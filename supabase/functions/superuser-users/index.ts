@@ -13,7 +13,8 @@ function jsonResponse(status: number, body: Record<string, unknown>) {
   });
 }
 
-async function ensureSuperuser(serviceClient: ReturnType<typeof createClient>, authUserId: string) {
+// deno-lint-ignore no-explicit-any
+async function ensureSuperuser(serviceClient: any, authUserId: string) {
   const { data, error } = await serviceClient
     .from("user_roles")
     .select("role")

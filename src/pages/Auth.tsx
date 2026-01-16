@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+
 import { Scale, Mail, Lock, User, Building2, Users, Key } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { z } from 'zod';
@@ -21,7 +21,6 @@ const signupSchema = loginSchema.extend({
 });
 
 type SignupRole = 'owner' | 'employee';
-type OwnerOption = 'create' | 'code';
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -32,11 +31,9 @@ export default function AuthPage() {
 
   // Signup-specific state
   const [signupRole, setSignupRole] = useState<SignupRole | null>(null);
-  const [ownerOption, setOwnerOption] = useState<OwnerOption>('create');
-  const [companyName, setCompanyName] = useState('');
   const [signupCode, setSignupCode] = useState('');
 
-  const { user, isLoading: authLoading, rolesLoaded, isAdmin, isStaff, isClient, signIn, signUp } = useAuth();
+  const { user, isLoading: authLoading, rolesLoaded, isAdmin, isStaff, isClient, isSuperuser, signIn, signUp } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -47,20 +44,21 @@ export default function AuthPage() {
     }
 
     if (user && rolesLoaded) {
-      if (isClient) {
+      // Superusers go to manager dashboard
+      if (isSuperuser) {
+        navigate('/manager', { replace: true });
+      } else if (isClient) {
         navigate('/client', { replace: true });
       } else if (isAdmin || isStaff) {
         navigate('/dashboard', { replace: true });
       }
     }
-  }, [user, authLoading, rolesLoaded, isAdmin, isStaff, isClient, navigate]);
+  }, [user, authLoading, rolesLoaded, isAdmin, isStaff, isClient, isSuperuser, navigate]);
 
   // Reset signup state when switching modes
   useEffect(() => {
     if (isLogin) {
       setSignupRole(null);
-      setOwnerOption('create');
-      setCompanyName('');
       setSignupCode('');
     }
   }, [isLogin]);
@@ -115,20 +113,11 @@ export default function AuthPage() {
           return;
         }
 
-        if (signupRole === 'owner' && ownerOption === 'create' && !companyName.trim()) {
-          toast({
-            title: 'Company name required',
-            description: 'Please enter your company name',
-            variant: 'destructive',
-          });
-          setIsLoading(false);
-          return;
-        }
-
-        if (signupRole === 'owner' && ownerOption === 'code' && !signupCode.trim()) {
+        // Owner always requires registration code now
+        if (signupRole === 'owner' && !signupCode.trim()) {
           toast({
             title: 'Registration code required',
-            description: 'Please enter your registration code',
+            description: 'Please enter your company registration code',
             variant: 'destructive',
           });
           setIsLoading(false);
@@ -145,24 +134,14 @@ export default function AuthPage() {
           return;
         }
 
-        // Build signup options
+        // Build signup options - owner always uses registration code now
         const signupOptions: {
           is_owner: boolean;
           signup_code?: string;
-          company_name?: string;
         } = {
           is_owner: signupRole === 'owner',
+          signup_code: signupCode.trim(),
         };
-
-        if (signupRole === 'owner') {
-          if (ownerOption === 'create') {
-            signupOptions.company_name = companyName.trim();
-          } else {
-            signupOptions.signup_code = signupCode.trim();
-          }
-        } else {
-          signupOptions.signup_code = signupCode.trim();
-        }
 
         const { error } = await signUp(email, password, name, signupOptions);
         if (error) {
@@ -246,7 +225,7 @@ export default function AuthPage() {
                     >
                       <Building2 className={`w-5 h-5 mb-2 ${signupRole === 'owner' ? 'text-primary' : 'text-muted-foreground'}`} />
                       <div className="font-medium">Owner</div>
-                      <div className="text-xs text-muted-foreground">Set up a new company</div>
+                      <div className="text-xs text-muted-foreground">Claim your company</div>
                     </button>
                     <button
                       type="button"
@@ -265,54 +244,25 @@ export default function AuthPage() {
                 </div>
               )}
 
-              {/* Owner-specific options */}
+              {/* Owner registration code */}
               {!isLogin && signupRole === 'owner' && (
-                <div className="space-y-3 p-3 rounded-lg bg-muted/50">
-                  <RadioGroup value={ownerOption} onValueChange={(v) => setOwnerOption(v as OwnerOption)}>
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="create" id="create" />
-                      <Label htmlFor="create" className="font-normal cursor-pointer">Create a new company</Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="code" id="code" />
-                      <Label htmlFor="code" className="font-normal cursor-pointer">I have a registration code</Label>
-                    </div>
-                  </RadioGroup>
-
-                  {ownerOption === 'create' && (
-                    <div className="space-y-2 pt-2">
-                      <Label htmlFor="companyName">Company Name</Label>
-                      <div className="relative">
-                        <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                        <Input
-                          id="companyName"
-                          type="text"
-                          value={companyName}
-                          onChange={(e) => setCompanyName(e.target.value)}
-                          placeholder="Acme Law Firm"
-                          className="pl-10"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {ownerOption === 'code' && (
-                    <div className="space-y-2 pt-2">
-                      <Label htmlFor="regCode">Registration Code</Label>
-                      <div className="relative">
-                        <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                        <Input
-                          id="regCode"
-                          type="text"
-                          value={signupCode}
-                          onChange={(e) => setSignupCode(e.target.value.toUpperCase())}
-                          placeholder="ABCD1234"
-                          className="pl-10 uppercase"
-                          maxLength={8}
-                        />
-                      </div>
-                    </div>
-                  )}
+                <div className="space-y-2 p-3 rounded-lg bg-muted/50">
+                  <Label htmlFor="regCode">Company Registration Code</Label>
+                  <div className="relative">
+                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="regCode"
+                      type="text"
+                      value={signupCode}
+                      onChange={(e) => setSignupCode(e.target.value.toUpperCase())}
+                      placeholder="ABCD1234"
+                      className="pl-10 uppercase"
+                      maxLength={8}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Get this code from your system administrator
+                  </p>
                 </div>
               )}
 

@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AdminRoute } from "@/components/admin/AdminRoute";
 import { StaffRoute } from "@/components/auth/StaffRoute";
+import { SuperuserRoute } from "@/components/auth/SuperuserRoute";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
@@ -23,6 +24,7 @@ import AdminMeetingTypes from "./pages/admin/AdminMeetingTypes";
 import AdminPresets from "./pages/admin/AdminPresets";
 import AdminSchedulerMapping from "./pages/admin/AdminSchedulerMapping";
 import AdminSettings from "./pages/admin/AdminSettings";
+import ManagerDashboard from "./pages/manager/ManagerDashboard";
 import Home from "./pages/Home";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
@@ -140,6 +142,15 @@ const App = () => (
                 <AdminRoute>
                   <AdminSettings />
                 </AdminRoute>
+              }
+            />
+            {/* Superuser Manager routes */}
+            <Route
+              path="/manager"
+              element={
+                <SuperuserRoute>
+                  <ManagerDashboard />
+                </SuperuserRoute>
               }
             />
             <Route path="*" element={<NotFound />} />

@@ -17,7 +17,8 @@ function generateCode() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
 }
 
-async function ensureSuperuser(serviceClient: ReturnType<typeof createClient>, authUserId: string) {
+// deno-lint-ignore no-explicit-any
+async function ensureSuperuser(serviceClient: any, authUserId: string) {
   const { data, error } = await serviceClient
     .from("user_roles")
     .select("role")
