@@ -10,8 +10,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, CheckCircle, XCircle, Clock, Copy, Key } from "lucide-react";
+import { Plus, Pencil, CheckCircle, XCircle, Clock, Copy, Key, HelpCircle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { PrimaryRoleBadge, StatusBadge, BusinessRoleLabel } from "@/components/ui/role-badge";
+import { getPrimaryRoleLabel } from "@/lib/roles";
+import { RoleHelpModal } from "@/components/help/RoleHelpModal";
 
 interface User {
   id: string;
@@ -38,6 +41,7 @@ export default function AdminUsers() {
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [showRoleHelp, setShowRoleHelp] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [formData, setFormData] = useState({
     name: "",
@@ -260,7 +264,12 @@ export default function AdminUsers() {
                       <TableRow key={user.id}>
                         <TableCell className="font-medium">{user.name}</TableCell>
                         <TableCell>{user.email}</TableCell>
-                        <TableCell>{user.role}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <PrimaryRoleBadge role="Pending" />
+                            <BusinessRoleLabel role={user.role} />
+                          </div>
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <Button
@@ -377,33 +386,60 @@ export default function AdminUsers() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
+                  <TableHead>
+                    <div className="flex items-center gap-1">
+                      Role
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-5 w-5" 
+                        onClick={() => setShowRoleHelp(true)}
+                      >
+                        <HelpCircle className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="w-[80px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {approvedUsers.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell className="font-medium">{user.name}</TableCell>
-                    <TableCell>{user.email}</TableCell>
-                    <TableCell>{user.role}</TableCell>
-                    <TableCell>
-                      <span className={user.active ? "text-green-600" : "text-muted-foreground"}>
-                        {user.active ? "Active" : "Inactive"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Button variant="ghost" size="icon" onClick={() => openEditDialog(user)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {approvedUsers.map((user) => {
+                  const primaryRole = getPrimaryRoleLabel(
+                    user.role === 'Admin' || user.role === 'Owner' ? 'admin' : 'staff',
+                    user.role,
+                    user.approved
+                  );
+                  const showBusinessRole = primaryRole !== 'Owner' && primaryRole !== 'Admin';
+                  
+                  return (
+                    <TableRow key={user.id}>
+                      <TableCell className="font-medium">{user.name}</TableCell>
+                      <TableCell>{user.email}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <PrimaryRoleBadge role={primaryRole} />
+                          {showBusinessRole && <BusinessRoleLabel role={user.role} />}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge active={user.active} approved={user.approved} />
+                      </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" onClick={() => openEditDialog(user)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
         )}
+
+        {/* Role Help Modal */}
+        <RoleHelpModal open={showRoleHelp} onOpenChange={setShowRoleHelp} />
       </div>
     </AdminLayout>
   );

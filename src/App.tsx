@@ -27,6 +27,7 @@ import Home from "./pages/Home";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import PendingApproval from "./pages/PendingApproval";
+import StaffSettings from "./pages/StaffSettings";
 
 const queryClient = new QueryClient();
 
@@ -81,6 +82,14 @@ const App = () => (
               element={
                 <StaffRoute>
                   <Help />
+                </StaffRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <StaffRoute>
+                  <StaffSettings />
                 </StaffRoute>
               }
             />
