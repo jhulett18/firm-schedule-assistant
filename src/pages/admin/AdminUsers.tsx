@@ -4,12 +4,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, CheckCircle, XCircle, Clock, Copy, Key, HelpCircle } from "lucide-react";
+import { Plus, Pencil, CheckCircle, XCircle, Clock, Copy, Key, HelpCircle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { PrimaryRoleBadge, StatusBadge, BusinessRoleLabel } from "@/components/ui/role-badge";
 import { getPrimaryRoleLabel } from "@/lib/roles";
@@ -41,9 +42,11 @@ export default function AdminUsers() {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [showRoleHelp, setShowRoleHelp] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
+    role: "SupportStaff" as "Attorney" | "SupportStaff" | "Admin" | "Owner",
     active: true,
     timezone_default: "America/New_York",
   });
@@ -84,11 +87,25 @@ export default function AdminUsers() {
   }
 
   function openCreateDialog() {
+    setEditingUser(null);
     setFormData({
       name: "",
       email: "",
+      role: "SupportStaff",
       active: true,
       timezone_default: "America/New_York",
+    });
+    setDialogOpen(true);
+  }
+
+  function openEditDialog(user: User) {
+    setEditingUser(user);
+    setFormData({
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      active: user.active,
+      timezone_default: user.timezone_default,
     });
     setDialogOpen(true);
   }
@@ -96,14 +113,29 @@ export default function AdminUsers() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    const { error } = await supabase.from("users").insert(formData as any);
+    if (editingUser) {
+      const { error } = await supabase
+        .from("users")
+        .update(formData as any)
+        .eq("id", editingUser.id);
 
-    if (error) {
-      toast({ title: "Error creating user", description: error.message, variant: "destructive" });
+      if (error) {
+        toast({ title: "Error updating user", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "User updated" });
+        setDialogOpen(false);
+        fetchUsers();
+      }
     } else {
-      toast({ title: "User created" });
-      setDialogOpen(false);
-      fetchUsers();
+      const { error } = await supabase.from("users").insert(formData as any);
+
+      if (error) {
+        toast({ title: "Error creating user", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "User created" });
+        setDialogOpen(false);
+        fetchUsers();
+      }
     }
   }
 
@@ -280,7 +312,7 @@ export default function AdminUsers() {
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Add User</DialogTitle>
+                <DialogTitle>{editingUser ? "Edit User" : "Add User"}</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
@@ -303,6 +335,25 @@ export default function AdminUsers() {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label htmlFor="role">Role</Label>
+                  <Select
+                    value={formData.role}
+                    onValueChange={(value: "Attorney" | "SupportStaff" | "Admin" | "Owner") =>
+                      setFormData({ ...formData, role: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Owner">Owner</SelectItem>
+                      <SelectItem value="Attorney">Attorney</SelectItem>
+                      <SelectItem value="SupportStaff">Support Staff</SelectItem>
+                      <SelectItem value="Admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="timezone">Timezone</Label>
                   <Input
                     id="timezone"
@@ -319,7 +370,7 @@ export default function AdminUsers() {
                   <Label htmlFor="active">Active</Label>
                 </div>
                 <Button type="submit" className="w-full">
-                  Create
+                  {editingUser ? "Update" : "Create"}
                 </Button>
               </form>
             </DialogContent>
@@ -349,6 +400,7 @@ export default function AdminUsers() {
                     </div>
                   </TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-[80px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -372,6 +424,11 @@ export default function AdminUsers() {
                       </TableCell>
                       <TableCell>
                         <StatusBadge active={user.active} approved={user.approved} />
+                      </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" onClick={() => openEditDialog(user)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
