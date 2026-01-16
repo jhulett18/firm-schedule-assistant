@@ -465,7 +465,7 @@ serve(async (req) => {
 
     if (action === "cancel") {
       await cancelLawmaticsAppointment(supabase, lawmaticsAppointmentId, warnings);
-      await cancelGoogleEvents(supabase, meeting.id, warnings);
+      await deleteGoogleEvents(supabase, meeting.id, warnings);
 
       // Fetch full meeting data for notification
       const { data: fullMeeting } = await supabase

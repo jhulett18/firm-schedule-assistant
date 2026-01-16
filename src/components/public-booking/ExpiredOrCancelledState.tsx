@@ -46,9 +46,14 @@ export function ExpiredOrCancelledState({
 
         <Card>
           <CardContent className="pt-6">
-            <p className="font-medium text-foreground mb-2">What to do next</p>
+            <p className="font-medium text-foreground mb-2">
+              {reason === "cancelled" ? "Need to reschedule?" : "What to do next"}
+            </p>
             <p className="text-sm text-muted-foreground mb-4">
-              {contactMessage || "Please contact our office to request a new scheduling link."}
+              {reason === "cancelled"
+                ? "We'd be happy to help you find a new time. Please contact our office to request a new appointment."
+                : (contactMessage || "Please contact our office to request a new scheduling link.")
+              }
             </p>
             <div className="space-y-2">
               {contactPhone && (
