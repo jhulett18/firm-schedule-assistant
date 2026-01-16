@@ -33,6 +33,7 @@ import {
   RefreshCw,
   Loader2,
   Briefcase,
+  Plus,
 } from "lucide-react";
 import { copyToClipboard, getBookingUrl, generateClientEmailTemplate } from "@/lib/clipboard";
 
@@ -451,8 +452,21 @@ export default function RequestNew() {
                 </Button>
               </div>
 
-              <div className="border-t pt-4">
-                <Button className="w-full" onClick={() => navigate("/requests")}>
+              <div className="border-t pt-4 space-y-2">
+                <Button 
+                  className="w-full" 
+                  onClick={() => {
+                    setCreatedToken(null);
+                    setFormData(initialFormData);
+                    setCurrentStep(0);
+                    setErrors({});
+                    setExistingMatters([]);
+                  }}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Another Request
+                </Button>
+                <Button variant="outline" className="w-full" onClick={() => navigate("/requests")}>
                   Go to Booking Requests
                 </Button>
               </div>
