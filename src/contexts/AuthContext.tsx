@@ -7,7 +7,7 @@ interface InternalUser {
   auth_user_id: string;
   name: string;
   email: string;
-  role: 'Attorney' | 'SupportStaff' | 'Admin';
+  role: 'Attorney' | 'SupportStaff' | 'Admin' | 'Owner';
   active: boolean;
   company_id: string;
   timezone_default: string;
@@ -16,6 +16,15 @@ interface InternalUser {
   max_search_window_days: number;
   zoom_oauth_connected: boolean;
   zoom_user_id: string | null;
+  approved: boolean;
+  approved_by: string | null;
+  approved_at: string | null;
+}
+
+interface SignupOptions {
+  is_owner: boolean;
+  signup_code?: string;
+  company_name?: string;
 }
 
 interface AuthContextType {
@@ -30,7 +39,7 @@ interface AuthContextType {
   rolesLoaded: boolean;
   isDevMode: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, name: string) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string, name: string, options?: SignupOptions) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   enableDevMode: () => void;
 }
@@ -199,16 +208,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: error as Error | null };
   };
 
-  // Simplified signup - triggers handle role assignment for staff
-  const signUp = async (email: string, password: string, name: string) => {
+  // Signup with optional owner/employee metadata - triggers handle role assignment
+  const signUp = async (email: string, password: string, name: string, options?: SignupOptions) => {
     const redirectUrl = `${window.location.origin}/`;
-    
+
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         emailRedirectTo: redirectUrl,
-        data: { name },
+        data: {
+          name,
+          is_owner: options?.is_owner ?? false,
+          signup_code: options?.signup_code,
+          company_name: options?.company_name,
+        },
       },
     });
 
