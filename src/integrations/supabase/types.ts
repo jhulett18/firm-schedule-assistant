@@ -398,6 +398,7 @@ export type Database = {
         Row: {
           booking_request_id: string | null
           client_email: string | null
+          company_id: string | null
           created_at: string
           created_by_user_id: string | null
           duration_minutes: number
@@ -433,6 +434,7 @@ export type Database = {
         Insert: {
           booking_request_id?: string | null
           client_email?: string | null
+          company_id?: string | null
           created_at?: string
           created_by_user_id?: string | null
           duration_minutes?: number
@@ -468,6 +470,7 @@ export type Database = {
         Update: {
           booking_request_id?: string | null
           client_email?: string | null
+          company_id?: string | null
           created_at?: string
           created_by_user_id?: string | null
           duration_minutes?: number
@@ -501,6 +504,13 @@ export type Database = {
           zoom_meeting_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "meetings_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "meetings_created_by_user_id_fkey"
             columns: ["created_by_user_id"]
