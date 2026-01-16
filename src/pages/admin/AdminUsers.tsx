@@ -52,7 +52,6 @@ export default function AdminUsers() {
   });
   const { toast } = useToast();
   const { internalUser, isAdmin } = useAuth();
-  const isJonathan = internalUser?.email === 'jonathan@legaleasemarketing.com';
 
   useEffect(() => {
     fetchUsers();
@@ -335,27 +334,25 @@ export default function AdminUsers() {
                     required
                   />
                 </div>
-                {!isJonathan && (
-                  <div className="space-y-2">
-                    <Label htmlFor="role">Role</Label>
-                    <Select
-                      value={formData.role}
-                      onValueChange={(value: "Attorney" | "SupportStaff" | "Admin" | "Owner") =>
-                        setFormData({ ...formData, role: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Owner">Owner</SelectItem>
-                        <SelectItem value="Attorney">Attorney</SelectItem>
-                        <SelectItem value="SupportStaff">Support Staff</SelectItem>
-                        <SelectItem value="Admin">Admin</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <Label htmlFor="role">Role</Label>
+                  <Select
+                    value={formData.role}
+                    onValueChange={(value: "Attorney" | "SupportStaff" | "Admin" | "Owner") =>
+                      setFormData({ ...formData, role: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Owner">Owner</SelectItem>
+                      <SelectItem value="Attorney">Attorney</SelectItem>
+                      <SelectItem value="SupportStaff">Support Staff</SelectItem>
+                      <SelectItem value="Admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="timezone">Timezone</Label>
                   <Input
