@@ -47,7 +47,7 @@ serve(async (req) => {
     }
 
     // Validate state parameter
-    let stateData: { userId: string; timestamp: number; appUrl?: string };
+    let stateData: { userId: string; companyId: string; timestamp: number; appUrl?: string };
     let redirectBase: string;
     try {
       stateData = JSON.parse(atob(state));
@@ -127,13 +127,16 @@ serve(async (req) => {
     // Store the access token in the database
     const supabase = createClient(supabaseUrl!, supabaseServiceKey!);
 
-    // Delete any existing connections (we only need one firm-wide connection)
-    await supabase.from("lawmatics_connections").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    // Delete any existing connections for THIS COMPANY only (each company has its own connection)
+    if (stateData.companyId) {
+      await supabase.from("lawmatics_connections").delete().eq("company_id", stateData.companyId);
+    }
 
-    // Insert the new connection
+    // Insert the new connection with company_id
     const { error: insertError } = await supabase.from("lawmatics_connections").insert({
       access_token: tokenData.access_token,
       connected_by_user_id: stateData.userId,
+      company_id: stateData.companyId,
     });
 
     if (insertError) {
@@ -141,7 +144,7 @@ serve(async (req) => {
       return Response.redirect(`${redirectBase}?lawmatics_error=storage_failed`);
     }
 
-    console.log("Lawmatics connection stored successfully for user:", stateData.userId);
+    console.log("Lawmatics connection stored successfully for company:", stateData.companyId);
 
     return Response.redirect(`${redirectBase}?lawmatics_success=true`);
   } catch (error) {

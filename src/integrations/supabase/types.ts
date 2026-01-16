@@ -262,6 +262,7 @@ export type Database = {
       lawmatics_connections: {
         Row: {
           access_token: string
+          company_id: string | null
           connected_at: string | null
           connected_by_user_id: string | null
           id: string
@@ -269,6 +270,7 @@ export type Database = {
         }
         Insert: {
           access_token: string
+          company_id?: string | null
           connected_at?: string | null
           connected_by_user_id?: string | null
           id?: string
@@ -276,12 +278,20 @@ export type Database = {
         }
         Update: {
           access_token?: string
+          company_id?: string | null
           connected_at?: string | null
           connected_by_user_id?: string | null
           id?: string
           updated_at?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "lawmatics_connections_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: true
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "lawmatics_connections_connected_by_user_id_fkey"
             columns: ["connected_by_user_id"]

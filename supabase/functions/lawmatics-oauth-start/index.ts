@@ -60,10 +60,10 @@ serve(async (req) => {
       );
     }
 
-    // Get internal user ID for state
+    // Get internal user ID and company_id for state
     const { data: userData, error: userError } = await supabase
       .from("users")
-      .select("id")
+      .select("id, company_id")
       .eq("auth_user_id", user.id)
       .single();
 
@@ -75,9 +75,10 @@ serve(async (req) => {
       );
     }
 
-    // Build state parameter with user ID, timestamp, and appUrl for validation
+    // Build state parameter with user ID, company_id, timestamp, and appUrl for validation
     const state = btoa(JSON.stringify({
       userId: userData.id,
+      companyId: userData.company_id,
       timestamp: Date.now(),
       appUrl,
     }));
