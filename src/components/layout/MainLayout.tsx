@@ -16,9 +16,11 @@ import {
   HelpCircle,
   Plus,
   UserCog,
+  Trash2,
 } from "lucide-react";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { RoleHelpModal } from "@/components/help/RoleHelpModal";
+import { DeleteAccountDialog } from "@/components/account/DeleteAccountDialog";
 import { cn } from "@/lib/utils";
 
 interface MainLayoutProps {
@@ -235,6 +237,19 @@ export function MainLayout({ children }: MainLayoutProps) {
                 ) : null}
 
                 <div className="h-px bg-border my-2" />
+                
+                {/* Delete Account - only for staff/admin/owner */}
+                {(isAdmin || isStaff) && (
+                  <DeleteAccountDialog
+                    trigger={
+                      <Button variant="ghost" className="justify-start gap-2 text-destructive hover:text-destructive w-full">
+                        <Trash2 className="w-4 h-4" />
+                        Delete My Account
+                      </Button>
+                    }
+                  />
+                )}
+
                 <Button
                   variant="ghost"
                   className="justify-start gap-2 text-destructive hover:text-destructive"
