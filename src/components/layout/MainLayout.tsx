@@ -122,7 +122,14 @@ export function MainLayout({ children }: MainLayoutProps) {
           )}
           
           <Button
-            onClick={() => navigate("/requests/new")}
+            onClick={() => {
+              if (location.pathname === "/requests/new") {
+                // Already on the page, force a full page reload to reset state
+                window.location.href = "/requests/new";
+              } else {
+                navigate("/requests/new");
+              }
+            }}
             size="sm"
             className="hidden sm:flex gap-2"
           >
@@ -159,7 +166,14 @@ export function MainLayout({ children }: MainLayoutProps) {
 
                 <Button
                   className="justify-start gap-2"
-                  onClick={() => navigate("/requests/new")}
+                  onClick={() => {
+                    if (location.pathname === "/requests/new") {
+                      // Already on the page, force a full page reload to reset state
+                      window.location.href = "/requests/new";
+                    } else {
+                      navigate("/requests/new");
+                    }
+                  }}
                 >
                   <Plus className="w-4 h-4" />
                   New Booking Request
