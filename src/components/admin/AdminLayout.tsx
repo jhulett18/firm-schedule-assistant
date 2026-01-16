@@ -1,10 +1,9 @@
 import { ReactNode, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Users, DoorOpen, Calendar, Link2, Map, Settings, HelpCircle, Trash2 } from "lucide-react";
+import { Users, DoorOpen, Calendar, Link2, Map, Settings, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { RoleHelpModal } from "@/components/help/RoleHelpModal";
-import { DeleteAccountDialog } from "@/components/account/DeleteAccountDialog";
 
 interface AdminLayoutProps {
   children: ReactNode;
@@ -29,19 +28,9 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-semibold text-foreground">Admin</h1>
-            <div className="flex items-center gap-3">
-              <DeleteAccountDialog
-                trigger={
-                  <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-2">
-                    <Trash2 className="w-4 h-4" />
-                    <span className="hidden sm:inline">Delete My Account</span>
-                  </Button>
-                }
-              />
-              <Link to="/" className="text-sm text-muted-foreground hover:text-foreground">
-                ← Back to Chat
-              </Link>
-            </div>
+            <Link to="/" className="text-sm text-muted-foreground hover:text-foreground">
+              ← Back to Chat
+            </Link>
           </div>
         </div>
       </header>

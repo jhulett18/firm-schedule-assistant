@@ -3,24 +3,17 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "@/hooks/use-toast";
 import {
   Scale,
   Settings,
-  LogOut,
   Menu,
   Home,
   FileText,
   HelpCircle,
   Plus,
-  UserCog,
-  Trash2,
 } from "lucide-react";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { RoleHelpModal } from "@/components/help/RoleHelpModal";
-import { DeleteAccountDialog } from "@/components/account/DeleteAccountDialog";
 import { cn } from "@/lib/utils";
 
 interface MainLayoutProps {
@@ -34,35 +27,10 @@ const navItems = [
 ];
 
 export function MainLayout({ children }: MainLayoutProps) {
-  const { internalUser, isAdmin, isStaff, signOut } = useAuth();
+  const { internalUser, isAdmin, isStaff } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const [isChangingRole, setIsChangingRole] = useState(false);
   const [showRoleHelp, setShowRoleHelp] = useState(false);
-
-  // Check if current user is jonathan@legaleasemarketing.com
-  const isJonathan = internalUser?.email?.toLowerCase() === "jonathan@legaleasemarketing.com";
-
-  async function handleRoleChange(newRole: "Attorney" | "SupportStaff" | "Admin") {
-    if (!internalUser) return;
-    setIsChangingRole(true);
-    try {
-      const { error } = await supabase
-        .from("users")
-        .update({ role: newRole })
-        .eq("id", internalUser.id);
-      
-      if (error) throw error;
-      
-      toast({ title: "Role changed", description: `You are now viewing as ${newRole}. Refresh to see changes.` });
-      // Reload to update auth context
-      window.location.reload();
-    } catch (err: any) {
-      toast({ title: "Error changing role", description: err.message, variant: "destructive" });
-    } finally {
-      setIsChangingRole(false);
-    }
-  }
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -104,27 +72,6 @@ export function MainLayout({ children }: MainLayoutProps) {
         </nav>
 
         <div className="flex items-center gap-2">
-          {/* Role Switcher for Jonathan */}
-          {isJonathan && (
-            <div className="hidden md:flex items-center gap-2 mr-2 px-2 py-1 bg-muted rounded-lg">
-              <UserCog className="w-4 h-4 text-muted-foreground" />
-              <Select
-                value={internalUser?.role || "SupportStaff"}
-                onValueChange={(v) => handleRoleChange(v as "Attorney" | "SupportStaff" | "Admin")}
-                disabled={isChangingRole}
-              >
-                <SelectTrigger className="w-32 h-8 text-xs border-none bg-transparent">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Attorney">Attorney</SelectItem>
-                  <SelectItem value="SupportStaff">Support Staff</SelectItem>
-                  <SelectItem value="Admin">Admin</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          
           <Button
             onClick={() => {
               if (location.pathname === "/requests/new") {
@@ -236,40 +183,9 @@ export function MainLayout({ children }: MainLayoutProps) {
                   </>
                 ) : null}
 
-                <div className="h-px bg-border my-2" />
-                
-                {/* Delete Account - only for staff/admin/owner */}
-                {(isAdmin || isStaff) && (
-                  <DeleteAccountDialog
-                    trigger={
-                      <Button variant="ghost" className="justify-start gap-2 text-destructive hover:text-destructive w-full">
-                        <Trash2 className="w-4 h-4" />
-                        Delete My Account
-                      </Button>
-                    }
-                  />
-                )}
-
-                <Button
-                  variant="ghost"
-                  className="justify-start gap-2 text-destructive hover:text-destructive"
-                  onClick={signOut}
-                >
-                  <LogOut className="w-4 h-4" />
-                  Sign Out
-                </Button>
               </div>
             </SheetContent>
           </Sheet>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={signOut}
-            className="hidden md:flex"
-          >
-            <LogOut className="w-4 h-4" />
-          </Button>
         </div>
       </header>
 
