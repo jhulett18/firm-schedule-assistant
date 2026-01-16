@@ -1,7 +1,9 @@
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Users, DoorOpen, Calendar, Link2, Map, Settings } from "lucide-react";
+import { Users, DoorOpen, Calendar, Link2, Map, Settings, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { RoleHelpModal } from "@/components/help/RoleHelpModal";
 
 interface AdminLayoutProps {
   children: ReactNode;
@@ -18,6 +20,7 @@ const navItems = [
 
 export function AdminLayout({ children }: AdminLayoutProps) {
   const location = useLocation();
+  const [showRoleHelp, setShowRoleHelp] = useState(false);
 
   return (
     <div className="min-h-screen bg-background">
@@ -57,6 +60,19 @@ export function AdminLayout({ children }: AdminLayoutProps) {
 
         <main>{children}</main>
       </div>
+
+      {/* Floating Role Help Button */}
+      <Button
+        variant="outline"
+        size="icon"
+        className="fixed bottom-4 right-4 rounded-full shadow-lg z-50 bg-background"
+        onClick={() => setShowRoleHelp(true)}
+      >
+        <HelpCircle className="h-5 w-5" />
+      </Button>
+
+      {/* Role Help Modal */}
+      <RoleHelpModal open={showRoleHelp} onOpenChange={setShowRoleHelp} />
     </div>
   );
 }

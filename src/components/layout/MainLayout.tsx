@@ -18,6 +18,7 @@ import {
   UserCog,
 } from "lucide-react";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
+import { RoleHelpModal } from "@/components/help/RoleHelpModal";
 import { cn } from "@/lib/utils";
 
 interface MainLayoutProps {
@@ -31,10 +32,11 @@ const navItems = [
 ];
 
 export function MainLayout({ children }: MainLayoutProps) {
-  const { internalUser, isAdmin, signOut } = useAuth();
+  const { internalUser, isAdmin, isStaff, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [isChangingRole, setIsChangingRole] = useState(false);
+  const [showRoleHelp, setShowRoleHelp] = useState(false);
 
   // Check if current user is jonathan@legaleasemarketing.com
   const isJonathan = internalUser?.email?.toLowerCase() === "jonathan@legaleasemarketing.com";
@@ -139,7 +141,7 @@ export function MainLayout({ children }: MainLayoutProps) {
 
           <NotificationCenter />
 
-          {isAdmin && (
+          {isAdmin ? (
             <Button
               variant="ghost"
               size="sm"
@@ -148,7 +150,16 @@ export function MainLayout({ children }: MainLayoutProps) {
             >
               <Settings className="w-4 h-4" />
             </Button>
-          )}
+          ) : isStaff ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/settings")}
+              className="hidden md:flex"
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
+          ) : null}
 
           {/* Mobile menu */}
           <Sheet>
@@ -197,7 +208,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                   );
                 })}
 
-                {isAdmin && (
+                {isAdmin ? (
                   <>
                     <div className="h-px bg-border my-2" />
                     <Button
@@ -209,7 +220,19 @@ export function MainLayout({ children }: MainLayoutProps) {
                       Admin Settings
                     </Button>
                   </>
-                )}
+                ) : isStaff ? (
+                  <>
+                    <div className="h-px bg-border my-2" />
+                    <Button
+                      variant="ghost"
+                      className="justify-start gap-2"
+                      onClick={() => navigate("/settings")}
+                    >
+                      <Settings className="w-4 h-4" />
+                      My Settings
+                    </Button>
+                  </>
+                ) : null}
 
                 <div className="h-px bg-border my-2" />
                 <Button
@@ -241,6 +264,21 @@ export function MainLayout({ children }: MainLayoutProps) {
           {children}
         </div>
       </main>
+
+      {/* Floating Role Help Button */}
+      {(isAdmin || isStaff) && (
+        <Button
+          variant="outline"
+          size="icon"
+          className="fixed bottom-4 right-4 rounded-full shadow-lg z-50 bg-background"
+          onClick={() => setShowRoleHelp(true)}
+        >
+          <HelpCircle className="h-5 w-5" />
+        </Button>
+      )}
+
+      {/* Role Help Modal */}
+      <RoleHelpModal open={showRoleHelp} onOpenChange={setShowRoleHelp} />
     </div>
   );
 }
