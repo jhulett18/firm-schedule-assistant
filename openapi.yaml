@@ -15,6 +15,7 @@ tags:
   - name: Google
   - name: Lawmatics
   - name: Public
+  - name: Superuser
 
 paths:
   /health:
@@ -135,6 +136,95 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteAccountResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /superuser-companies:
+    get:
+      tags: [Superuser]
+      summary: List all companies (superuser)
+      description: Returns company metadata and codes. See `supabase/functions/superuser-companies/index.ts`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Company list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuperuserCompaniesResponse"
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+    post:
+      tags: [Superuser]
+      summary: Create a new company (superuser)
+      description: Generates registration and invite codes. See `supabase/functions/superuser-companies/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuperuserCompanyCreateRequest"
+      responses:
+        "200":
+          description: Company created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuperuserCompanyResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+    patch:
+      tags: [Superuser]
+      summary: Regenerate company codes (superuser)
+      description: Regenerate registration and/or invite codes. See `supabase/functions/superuser-companies/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuperuserCompanyRegenerateRequest"
+      responses:
+        "200":
+          description: Company updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuperuserCompanyResponse"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "500": { $ref: "#/components/responses/ErrorResponse" }
+
+  /superuser-users:
+    post:
+      tags: [Superuser]
+      summary: Manage users by company (superuser)
+      description: List users or update approvals. See `supabase/functions/superuser-users/index.ts`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuperuserUsersRequest"
+      responses:
+        "200":
+          description: User management response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuperuserUsersResponse"
         "400": { $ref: "#/components/responses/ErrorResponse" }
         "401": { $ref: "#/components/responses/ErrorResponse" }
         "403": { $ref: "#/components/responses/ErrorResponse" }
@@ -663,6 +753,85 @@ components:
       type: object
       properties:
         success: { type: boolean }
+        error: { type: string }
+      required: [success]
+
+    SuperuserCompany:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        registration_code: { type: string, nullable: true }
+        invite_code: { type: string, nullable: true }
+        owner_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+      required: [id, name]
+
+    SuperuserCompaniesResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        companies:
+          type: array
+          items: { $ref: "#/components/schemas/SuperuserCompany" }
+        error: { type: string }
+      required: [success]
+
+    SuperuserCompanyResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        company: { $ref: "#/components/schemas/SuperuserCompany" }
+        error: { type: string }
+      required: [success]
+
+    SuperuserCompanyCreateRequest:
+      type: object
+      properties:
+        name: { type: string }
+      required: [name]
+
+    SuperuserCompanyRegenerateRequest:
+      type: object
+      properties:
+        companyId: { type: string }
+        regenerate:
+          type: string
+          enum: [both, registration, invite]
+      required: [companyId]
+
+    SuperuserUser:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string }
+        active: { type: boolean }
+        approved: { type: boolean }
+        approved_at: { type: string, format: date-time, nullable: true }
+        approved_by: { type: string, nullable: true }
+        company_id: { type: string }
+      required: [id, name, email, role, active, approved, company_id]
+
+    SuperuserUsersRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [list, approve, reset_approval]
+        companyId: { type: string }
+        userId: { type: string }
+      required: [action]
+
+    SuperuserUsersResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/SuperuserUser" }
+        user: { $ref: "#/components/schemas/SuperuserUser" }
         error: { type: string }
       required: [success]
 
