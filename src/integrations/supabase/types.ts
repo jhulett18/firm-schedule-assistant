@@ -228,36 +228,19 @@ export type Database = {
         Row: {
           created_at: string
           id: string
-          invite_code: string | null
           name: string
-          owner_id: string | null
-          registration_code: string | null
         }
         Insert: {
           created_at?: string
           id?: string
-          invite_code?: string | null
           name: string
-          owner_id?: string | null
-          registration_code?: string | null
         }
         Update: {
           created_at?: string
           id?: string
-          invite_code?: string | null
           name?: string
-          owner_id?: string | null
-          registration_code?: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "companies_owner_id_fkey"
-            columns: ["owner_id"]
-            isOneToOne: false
-            referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       lawmatics_connections: {
         Row: {
@@ -794,9 +777,6 @@ export type Database = {
       users: {
         Row: {
           active: boolean
-          approved: boolean
-          approved_at: string | null
-          approved_by: string | null
           auth_user_id: string | null
           company_id: string
           created_at: string
@@ -816,9 +796,6 @@ export type Database = {
         }
         Insert: {
           active?: boolean
-          approved?: boolean
-          approved_at?: string | null
-          approved_by?: string | null
           auth_user_id?: string | null
           company_id?: string
           created_at?: string
@@ -838,9 +815,6 @@ export type Database = {
         }
         Update: {
           active?: boolean
-          approved?: boolean
-          approved_at?: string | null
-          approved_by?: string | null
           auth_user_id?: string | null
           company_id?: string
           created_at?: string
@@ -919,7 +893,7 @@ export type Database = {
         | "Afternoon"
         | "Evening"
         | "None"
-      user_role: "Attorney" | "SupportStaff" | "Admin" | "Owner"
+      user_role: "Attorney" | "SupportStaff" | "Admin"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1084,7 +1058,7 @@ export const Constants = {
         "Evening",
         "None",
       ],
-      user_role: ["Attorney", "SupportStaff", "Admin", "Owner"],
+      user_role: ["Attorney", "SupportStaff", "Admin"],
     },
   },
 } as const
