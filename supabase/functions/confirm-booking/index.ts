@@ -408,19 +408,26 @@ async function createGoogleCalendarEventsForAllParticipants(
       results.push(result);
 
       if (result.created && result.event_id) {
-        // Persist to meeting_google_events table (non-blocking)
-        try {
-          await supabase
-            .from("meeting_google_events")
-            .insert({
+        // Persist to meeting_google_events table using UPSERT to handle reschedules
+        // On reschedule, a new Google event is created for the same (meeting_id, user_id) pair
+        // UPSERT ensures we update the existing row with the new event ID instead of failing
+        const { error: upsertError } = await supabase
+          .from("meeting_google_events")
+          .upsert(
+            {
               meeting_id: meeting.id,
               user_id: participant.id,
               google_calendar_id: result.calendar_id,
               google_event_id: result.event_id,
-            });
-          console.log(`[createGoogleCalendarEventsForAllParticipants] Persisted new event for user ${participant.id}`);
-        } catch (insertErr) {
-          console.error(`Failed to persist Google event for user ${participant.id}:`, insertErr);
+            },
+            { onConflict: "meeting_id,user_id" }
+          );
+
+        if (upsertError) {
+          console.error(`[confirm-booking] Failed to persist Google event for meeting ${meeting.id}, user ${participant.id}:`, upsertError.message);
+          warnings.push(`Calendar event created but tracking failed for ${participant.email}`);
+        } else {
+          console.log(`[confirm-booking] Persisted Google event ${result.event_id} for meeting ${meeting.id}, user ${participant.id}, calendar ${result.calendar_id}`);
         }
       } else if (result.error) {
         warnings.push(`Google Calendar for ${participant.email}: ${result.error}`);
