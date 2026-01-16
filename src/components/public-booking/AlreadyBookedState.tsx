@@ -116,11 +116,19 @@ export function AlreadyBookedState({
       if (data?.success) {
         if (Array.isArray(data.warnings) && data.warnings.length > 0) {
           setWarnings(data.warnings);
+          // Show warning toast if there are calendar warnings
+          toast({
+            title: "Appointment cancelled",
+            description: "Your appointment has been cancelled. Some calendar updates may require attention.",
+            variant: "default",
+          });
+        } else {
+          // Clean cancellation with calendar events deleted
+          toast({
+            title: "Appointment cancelled",
+            description: "Your appointment and all calendar events have been removed.",
+          });
         }
-        toast({
-          title: "Appointment cancelled",
-          description: "Your appointment has been cancelled.",
-        });
         onCancelled?.();
       } else if (data?.error) {
         throw new Error(data.error);
