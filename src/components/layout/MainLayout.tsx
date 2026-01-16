@@ -11,6 +11,7 @@ import {
   FileText,
   HelpCircle,
   Plus,
+  Building2,
 } from "lucide-react";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { RoleHelpModal } from "@/components/help/RoleHelpModal";
@@ -27,7 +28,7 @@ const navItems = [
 ];
 
 export function MainLayout({ children }: MainLayoutProps) {
-  const { internalUser, isAdmin, isStaff } = useAuth();
+  const { internalUser, isAdmin, isStaff, isSuperuser } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [showRoleHelp, setShowRoleHelp] = useState(false);
@@ -89,6 +90,18 @@ export function MainLayout({ children }: MainLayoutProps) {
           </Button>
 
           <NotificationCenter />
+
+          {isSuperuser && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/manager")}
+              className="hidden md:flex gap-1"
+            >
+              <Building2 className="w-4 h-4" />
+              Manager
+            </Button>
+          )}
 
           {isAdmin ? (
             <Button
@@ -156,6 +169,20 @@ export function MainLayout({ children }: MainLayoutProps) {
                     </Button>
                   );
                 })}
+
+                {isSuperuser && (
+                  <>
+                    <div className="h-px bg-border my-2" />
+                    <Button
+                      variant="ghost"
+                      className="justify-start gap-2"
+                      onClick={() => navigate("/manager")}
+                    >
+                      <Building2 className="w-4 h-4" />
+                      Manager
+                    </Button>
+                  </>
+                )}
 
                 {isAdmin ? (
                   <>

@@ -1,9 +1,10 @@
 import { ReactNode, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Users, DoorOpen, Calendar, Link2, Map, Settings, HelpCircle } from "lucide-react";
+import { Users, DoorOpen, Calendar, Link2, Map, Settings, HelpCircle, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { RoleHelpModal } from "@/components/help/RoleHelpModal";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface AdminLayoutProps {
   children: ReactNode;
@@ -21,6 +22,7 @@ const navItems = [
 export function AdminLayout({ children }: AdminLayoutProps) {
   const location = useLocation();
   const [showRoleHelp, setShowRoleHelp] = useState(false);
+  const { isSuperuser } = useAuth();
 
   return (
     <div className="min-h-screen bg-background">
@@ -28,9 +30,17 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-semibold text-foreground">Admin</h1>
-            <Link to="/" className="text-sm text-muted-foreground hover:text-foreground">
-              ← Back to Chat
-            </Link>
+            <div className="flex items-center gap-4">
+              {isSuperuser && (
+                <Link to="/manager" className="flex items-center gap-1 text-sm text-primary hover:underline font-medium">
+                  <Building2 className="w-4 h-4" />
+                  Manager Dashboard
+                </Link>
+              )}
+              <Link to="/" className="text-sm text-muted-foreground hover:text-foreground">
+                ← Back to Chat
+              </Link>
+            </div>
           </div>
         </div>
       </header>
