@@ -26,6 +26,7 @@ import AdminSettings from "./pages/admin/AdminSettings";
 import Home from "./pages/Home";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
+import PendingApproval from "./pages/PendingApproval";
 
 const queryClient = new QueryClient();
 
@@ -39,6 +40,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path="/pending-approval" element={<PendingApproval />} />
             {/* Public legal pages - no auth required */}
             <Route path="/home" element={<Home />} />
             <Route path="/privacy" element={<Privacy />} />

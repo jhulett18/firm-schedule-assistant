@@ -8,7 +8,7 @@ interface StaffRouteProps {
 }
 
 export function StaffRoute({ children }: StaffRouteProps) {
-  const { user, isLoading, rolesLoaded, isAdmin, isStaff, isClient, isDevMode } = useAuth();
+  const { user, internalUser, isLoading, rolesLoaded, isAdmin, isStaff, isClient, isDevMode } = useAuth();
   const { toast } = useToast();
   const hasShownErrorRef = useRef(false);
 
@@ -29,6 +29,11 @@ export function StaffRoute({ children }: StaffRouteProps) {
   // Dev mode bypasses role checks
   if (isDevMode) {
     return <>{children}</>;
+  }
+
+  // User not approved -> redirect to pending approval page
+  if (rolesLoaded && internalUser && internalUser.approved === false) {
+    return <Navigate to="/pending-approval" replace />;
   }
 
   // Client trying to access staff pages -> redirect to client portal
