@@ -46,12 +46,10 @@ export default function Dashboard() {
               Send scheduling links to clients without managing dozens of Lawmatics schedulers.
             </p>
           </div>
-          {isAdmin && (
-            <Button variant="outline" onClick={() => setShowTestWizard(true)}>
-              <TestTube className="h-4 w-4 mr-2" />
-              Test My Booking
-            </Button>
-          )}
+          <Button variant="outline" onClick={() => setShowTestWizard(true)}>
+            <TestTube className="h-4 w-4 mr-2" />
+            Test My Booking
+          </Button>
         </div>
 
         {/* Test Booking Wizard */}
@@ -69,15 +67,25 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Top cards grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <SystemStatusCard status={systemStatus} isLoading={dataLoading} />
-          <NextActionCard action={nextAction} isLoading={dataLoading} />
-          <QuickLinksCard />
-        </div>
+        {/* Admin: Full top cards grid */}
+        {isAdmin && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <SystemStatusCard status={systemStatus} isLoading={dataLoading} isAdmin={true} />
+            <NextActionCard action={nextAction} isLoading={dataLoading} />
+            <QuickLinksCard isAdmin={true} />
+          </div>
+        )}
 
-        {/* Setup Checklist */}
-        {progressPercent < 100 && (
+        {/* Staff: Calendar status + QuickLinks */}
+        {!isAdmin && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <SystemStatusCard status={systemStatus} isLoading={dataLoading} isAdmin={false} />
+            <QuickLinksCard isAdmin={false} />
+          </div>
+        )}
+
+        {/* Setup Checklist - Admin only */}
+        {isAdmin && progressPercent < 100 && (
           <SetupChecklist
             steps={setupSteps}
             progressPercent={progressPercent}

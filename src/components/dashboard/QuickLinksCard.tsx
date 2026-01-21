@@ -2,33 +2,52 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Plus, FileText, Settings, HelpCircle, CalendarCheck } from "lucide-react";
+import { Plus, FileText, Settings, HelpCircle, CalendarCheck, User } from "lucide-react";
 import { BookClientNowDialog } from "@/components/requests/BookClientNowDialog";
 
-export function QuickLinksCard() {
+interface QuickLinksCardProps {
+  isAdmin?: boolean;
+}
+
+export function QuickLinksCard({ isAdmin = false }: QuickLinksCardProps) {
   const navigate = useNavigate();
   const [bookNowDialogOpen, setBookNowDialogOpen] = useState(false);
 
-  const links = [
+  const allLinks = [
     {
       label: "View Booking Requests",
       icon: FileText,
       href: "/requests",
       variant: "outline" as const,
+      showForStaff: true,
     },
     {
       label: "Admin Settings",
       icon: Settings,
       href: "/admin/settings",
       variant: "outline" as const,
+      showForStaff: false,
+    },
+    {
+      label: "My Settings",
+      icon: User,
+      href: "/settings",
+      variant: "outline" as const,
+      showForStaff: true,
+      hideForAdmin: true,
     },
     {
       label: "Help & How It Works",
       icon: HelpCircle,
       href: "/help",
       variant: "outline" as const,
+      showForStaff: true,
     },
   ];
+
+  const links = allLinks.filter(link =>
+    isAdmin ? !link.hideForAdmin : link.showForStaff
+  );
 
   return (
     <>

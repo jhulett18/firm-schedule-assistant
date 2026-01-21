@@ -9,16 +9,18 @@ import type { SystemStatus } from "@/hooks/useDashboardData";
 interface SystemStatusCardProps {
   status: SystemStatus;
   isLoading: boolean;
+  isAdmin?: boolean;
 }
 
-export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
+export function SystemStatusCard({ status, isLoading, isAdmin = true }: SystemStatusCardProps) {
   const [isOpen, setIsOpen] = useState(true);
+  const title = isAdmin ? "System Status" : "My Calendar Status";
 
   if (isLoading) {
     return (
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-lg">System Status</CardTitle>
+          <CardTitle className="text-lg">{title}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="animate-pulse space-y-3">
@@ -31,30 +33,36 @@ export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
     );
   }
 
-  const items = [
+  const allItems = [
     {
       label: "Lawmatics",
       connected: status.lawmaticsConnected,
       required: true,
+      adminOnly: true,
     },
     {
       label: "Calendar (Google)",
       connected: status.calendarConnected,
       required: true,
+      adminOnly: false,
     },
     {
       label: "Conference Rooms",
       connected: status.roomsCount > 0,
       count: status.roomsCount,
       required: false,
+      adminOnly: true,
     },
     {
       label: "Meeting Types",
       connected: status.meetingTypesCount > 0,
       count: status.meetingTypesCount,
       required: false,
+      adminOnly: true,
     },
   ];
+
+  const items = isAdmin ? allItems : allItems.filter(item => !item.adminOnly);
 
   const hasIssues = items.some((item) => item.required && !item.connected);
 
@@ -68,7 +76,7 @@ export function SystemStatusCard({ status, isLoading }: SystemStatusCardProps) {
           )}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <CardTitle className="text-lg">System Status</CardTitle>
+                <CardTitle className="text-lg">{title}</CardTitle>
                 <ChevronDown
                   className={cn(
                     "w-4 h-4 text-muted-foreground transition-transform duration-200",
