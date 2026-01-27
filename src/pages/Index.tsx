@@ -3,11 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Index() {
-  const { user, isLoading, rolesLoaded, userRole } = useAuth();
+  const { user, isLoading, rolesLoaded, userRole, isSuperuser } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    console.log('Index routing - isLoading:', isLoading, 'rolesLoaded:', rolesLoaded, 'user:', !!user, 'userRole:', userRole);
+    console.log('Index routing - isLoading:', isLoading, 'rolesLoaded:', rolesLoaded, 'user:', !!user, 'userRole:', userRole, 'isSuperuser:', isSuperuser);
     
     // Wait until both auth state AND roles are loaded
     if (isLoading || (user && !rolesLoaded)) {
@@ -16,8 +16,11 @@ export default function Index() {
     }
     
     if (user && rolesLoaded) {
-      // Route based on role
-      if (userRole === 'client') {
+      // Route based on role - superusers go to dashboard by default
+      if (isSuperuser) {
+        console.log('Superuser, routing to /dashboard');
+        navigate("/dashboard", { replace: true });
+      } else if (userRole === 'client') {
         console.log('Client user, routing to /client');
         navigate("/client", { replace: true });
       } else if (userRole === 'admin' || userRole === 'staff') {
@@ -32,7 +35,7 @@ export default function Index() {
       console.log('No user, routing to auth');
       navigate("/auth", { replace: true });
     }
-  }, [user, isLoading, rolesLoaded, userRole, navigate]);
+  }, [user, isLoading, rolesLoaded, userRole, isSuperuser, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
