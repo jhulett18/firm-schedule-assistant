@@ -77,3 +77,30 @@ verify_jwt = false
 
 [functions.lawmatics-find-matters-by-email]
 verify_jwt = false
+
+[functions.microsoft-oauth-start]
+verify_jwt = false
+
+[functions.microsoft-oauth-callback]
+verify_jwt = false
+
+[functions.microsoft-connection-status]
+verify_jwt = false
+
+[functions.refresh-microsoft-token]
+verify_jwt = false
+
+[functions.microsoft-list-calendars]
+verify_jwt = false
+
+[functions.microsoft-list-events]
+verify_jwt = false
+
+[functions.microsoft-availability-month]
+verify_jwt = false
+
+[functions.microsoft-availability-day]
+verify_jwt = false
+
+[functions.microsoft-disconnect]
+verify_jwt = false
