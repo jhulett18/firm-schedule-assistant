@@ -44,9 +44,9 @@ export default function AuthPage() {
     }
 
     if (user && rolesLoaded) {
-      // Superusers go to manager dashboard
+      // Superusers default to dashboard (can still access /manager via nav)
       if (isSuperuser) {
-        navigate('/manager', { replace: true });
+        navigate('/dashboard', { replace: true });
       } else if (isClient) {
         navigate('/client', { replace: true });
       } else if (isAdmin || isStaff) {
