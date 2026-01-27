@@ -104,3 +104,15 @@ verify_jwt = false
 
 [functions.microsoft-disconnect]
 verify_jwt = false
+
+[functions.lawmatics-list-practice-areas]
+verify_jwt = false
+
+[functions.lawmatics-list-sources]
+verify_jwt = false
+
+[functions.lawmatics-list-stages]
+verify_jwt = false
+
+[functions.lawmatics-submit-intake]
+verify_jwt = false

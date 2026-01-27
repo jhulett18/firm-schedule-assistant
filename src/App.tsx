@@ -30,6 +30,8 @@ import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import PendingApproval from "./pages/PendingApproval";
 import StaffSettings from "./pages/StaffSettings";
+import IntakeContact from "./pages/intake/IntakeContact";
+import IntakeDetails from "./pages/intake/IntakeDetails";
 
 const queryClient = new QueryClient();
 
@@ -53,6 +55,9 @@ const App = () => (
             <Route path="/client" element={<ClientHome />} />
             <Route path="/schedule" element={<Schedule />} />
             <Route path="/r/:token" element={<TokenRedirect />} />
+            {/* Intake forms - embeddable, no auth */}
+            <Route path="/intake/contact" element={<IntakeContact />} />
+            <Route path="/intake/details" element={<IntakeDetails />} />
             <Route path="/r/:token/*" element={<TokenRedirect />} />
             {/* Staff/Admin routes */}
             <Route
