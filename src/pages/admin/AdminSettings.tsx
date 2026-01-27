@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import { GoogleCalendarConnections } from "@/components/admin/GoogleCalendarConnections";
+import { MicrosoftCalendarConnections } from "@/components/admin/MicrosoftCalendarConnections";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -611,6 +612,9 @@ const AdminSettings = () => {
 
         {/* Google Calendar Connections Card */}
         <GoogleCalendarConnections />
+
+        {/* Microsoft Calendar Connections Card */}
+        <MicrosoftCalendarConnections />
 
         {/* Lawmatics Integration Card */}
         <Card>

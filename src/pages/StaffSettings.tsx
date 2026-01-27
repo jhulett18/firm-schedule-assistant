@@ -1,6 +1,7 @@
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { GoogleCalendarConnections } from "@/components/admin/GoogleCalendarConnections";
+import { MicrosoftCalendarConnections } from "@/components/admin/MicrosoftCalendarConnections";
 import { DeleteAccountDialog } from "@/components/account/DeleteAccountDialog";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
@@ -32,6 +33,22 @@ export default function StaffSettings() {
           </CardHeader>
           <CardContent>
             <GoogleCalendarConnections />
+          </CardContent>
+        </Card>
+
+        {/* Microsoft Calendar Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="h-5 w-5" />
+              Microsoft Outlook Calendar
+            </CardTitle>
+            <CardDescription>
+              Connect your calendar for availability checking when scheduling meetings
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <MicrosoftCalendarConnections />
           </CardContent>
         </Card>
 

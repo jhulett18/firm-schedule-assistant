@@ -23,8 +23,8 @@ interface BusyInterval {
   end: string;
 }
 
-// Refresh access token helper
-async function refreshAccessToken(
+// Refresh access token helper for Google
+async function refreshGoogleAccessToken(
   connectionId: string,
   refreshToken: string,
   supabase: any,
@@ -50,7 +50,7 @@ async function refreshAccessToken(
     });
 
     if (!tokenResponse.ok) {
-      console.error("Token refresh failed:", await tokenResponse.text());
+      console.error("Google token refresh failed:", await tokenResponse.text());
       return null;
     }
 
@@ -69,20 +69,90 @@ async function refreshAccessToken(
       .eq("id", connectionId);
 
     if (updateError) {
-      console.error("Failed to update refreshed token:", updateError);
+      console.error("Failed to update refreshed Google token:", updateError);
       return null;
     }
 
-    console.log("Token refreshed successfully for connection:", connectionId);
+    console.log("Google token refreshed successfully for connection:", connectionId);
     return { access_token: tokens.access_token, expires_at: tokenExpiresAt };
   } catch (err) {
-    console.error("Error during token refresh:", err);
+    console.error("Error during Google token refresh:", err);
     return null;
   }
 }
 
+// Refresh access token helper for Microsoft
+async function refreshMicrosoftAccessToken(
+  connectionId: string,
+  refreshToken: string,
+  supabase: any,
+): Promise<{ access_token: string; expires_at: string } | null> {
+  const MICROSOFT_CLIENT_ID = Deno.env.get("MICROSOFT_CLIENT_ID");
+  const MICROSOFT_CLIENT_SECRET = Deno.env.get("MICROSOFT_CLIENT_SECRET");
+
+  if (!MICROSOFT_CLIENT_ID || !MICROSOFT_CLIENT_SECRET) {
+    console.error("Missing Microsoft OAuth credentials for refresh");
+    return null;
+  }
+
+  try {
+    const tokenResponse = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: MICROSOFT_CLIENT_ID,
+        client_secret: MICROSOFT_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      console.error("Microsoft token refresh failed:", await tokenResponse.text());
+      return null;
+    }
+
+    const tokens = await tokenResponse.json();
+    const tokenExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+
+    const { error: updateError } = await supabase
+      .from("calendar_connections")
+      .update({
+        access_token: tokens.access_token,
+        token_expires_at: tokenExpiresAt,
+        ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", connectionId);
+
+    if (updateError) {
+      console.error("Failed to update refreshed Microsoft token:", updateError);
+      return null;
+    }
+
+    console.log("Microsoft token refreshed successfully for connection:", connectionId);
+    return { access_token: tokens.access_token, expires_at: tokenExpiresAt };
+  } catch (err) {
+    console.error("Error during Microsoft token refresh:", err);
+    return null;
+  }
+}
+
+// Generic refresh function that routes to the correct provider
+async function refreshAccessToken(
+  connectionId: string,
+  refreshToken: string,
+  provider: string,
+  supabase: any,
+): Promise<{ access_token: string; expires_at: string } | null> {
+  if (provider === "microsoft") {
+    return refreshMicrosoftAccessToken(connectionId, refreshToken, supabase);
+  }
+  return refreshGoogleAccessToken(connectionId, refreshToken, supabase);
+}
+
 // Google Calendar Provider with retry on 401
-async function getBusyIntervalsWithRetry(
+async function getGoogleBusyIntervalsWithRetry(
   connection: any,
   calendars: string[],
   start: string,
@@ -111,8 +181,8 @@ async function getBusyIntervalsWithRetry(
 
   // If 401 and we have refresh token, refresh and retry
   if (response.status === 401 && connection.refresh_token) {
-    console.log(`Got 401 for connection ${connection.id}, attempting refresh...`);
-    const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
+    console.log(`Got 401 for Google connection ${connection.id}, attempting refresh...`);
+    const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, "google", supabase);
     if (refreshResult) {
       accessToken = refreshResult.access_token;
       response = await doRequest(accessToken);
@@ -139,6 +209,103 @@ async function getBusyIntervalsWithRetry(
   }
 
   return { busy: allBusy, newAccessToken: accessToken !== connection.access_token ? accessToken : undefined };
+}
+
+// Microsoft Calendar Provider with retry on 401
+async function getMicrosoftBusyIntervalsWithRetry(
+  connection: any,
+  calendarIds: string[],
+  start: string,
+  end: string,
+  supabase: any,
+): Promise<{ busy: BusyInterval[]; newAccessToken?: string }> {
+  let accessToken = connection.access_token;
+  const allBusy: BusyInterval[] = [];
+
+  const doRequest = async (token: string, calendarId: string) => {
+    const params = new URLSearchParams({
+      startDateTime: start,
+      endDateTime: end,
+      $top: "500",
+      $orderby: "start/dateTime",
+      $select: "id,start,end,showAs,isCancelled,isAllDay",
+    });
+
+    const basePath = calendarId && calendarId !== "primary"
+      ? `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendarId)}/calendarView`
+      : "https://graph.microsoft.com/v1.0/me/calendarView";
+
+    const url = `${basePath}?${params}`;
+
+    return fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: 'outlook.timezone="UTC"',
+      },
+    });
+  };
+
+  for (const calendarId of calendarIds) {
+    let response = await doRequest(accessToken, calendarId);
+
+    // If 401 and we have refresh token, refresh and retry
+    if (response.status === 401 && connection.refresh_token) {
+      console.log(`Got 401 for Microsoft connection ${connection.id}, attempting refresh...`);
+      const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, "microsoft", supabase);
+      if (refreshResult) {
+        accessToken = refreshResult.access_token;
+        response = await doRequest(accessToken, calendarId);
+      }
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Microsoft Calendar API error for ${calendarId}:`, errorText);
+      continue;
+    }
+
+    const data = await response.json();
+    const events = data.value || [];
+
+    for (const event of events) {
+      if (event.isCancelled || event.showAs === "free") {
+        continue;
+      }
+
+      const startDateTime = event.start?.dateTime;
+      const endDateTime = event.end?.dateTime;
+
+      if (event.isAllDay) {
+        const startDate = new Date(startDateTime);
+        const endDate = new Date(endDateTime);
+        allBusy.push({
+          start: startDate.toISOString(),
+          end: endDate.toISOString(),
+        });
+      } else if (startDateTime && endDateTime) {
+        allBusy.push({
+          start: startDateTime.endsWith("Z") ? startDateTime : startDateTime + "Z",
+          end: endDateTime.endsWith("Z") ? endDateTime : endDateTime + "Z",
+        });
+      }
+    }
+  }
+
+  return { busy: allBusy, newAccessToken: accessToken !== connection.access_token ? accessToken : undefined };
+}
+
+// Generic function to get busy intervals based on provider
+async function getBusyIntervalsWithRetry(
+  connection: any,
+  calendars: string[],
+  start: string,
+  end: string,
+  supabase: any,
+): Promise<{ busy: BusyInterval[]; newAccessToken?: string }> {
+  if (connection.provider === "microsoft") {
+    return getMicrosoftBusyIntervalsWithRetry(connection, calendars, start, end, supabase);
+  }
+  return getGoogleBusyIntervalsWithRetry(connection, calendars, start, end, supabase);
 }
 
 // Generate slots from busy intervals
@@ -403,11 +570,11 @@ serve(async (req) => {
       console.log("Using legacy host + support_user_ids:", participantUserIds);
     }
 
-    // 5. Get calendar connections for ALL participants
+    // 5. Get calendar connections for ALL participants (both Google and Microsoft)
     const { data: connections } = await supabase
       .from("calendar_connections")
       .select("*")
-      .eq("provider", "google")
+      .in("provider", ["google", "microsoft"])
       .in("user_id", participantUserIds);
 
     console.log(`Found ${connections?.length || 0} calendar connections for ${participantUserIds.length} participants`);
@@ -426,16 +593,16 @@ serve(async (req) => {
 
       if (tokenExpiresAt && tokenExpiresAt < fiveMinutesFromNow) {
         if (connection.refresh_token) {
-          console.log(`Token expired/expiring for user ${connection.user_id}, refreshing...`);
-          const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, supabase);
+          console.log(`Token expired/expiring for user ${connection.user_id} (${connection.provider}), refreshing...`);
+          const refreshResult = await refreshAccessToken(connection.id, connection.refresh_token, connection.provider, supabase);
           if (refreshResult) {
             connection.access_token = refreshResult.access_token;
           } else {
-            console.error(`Failed to refresh token for user ${connection.user_id}`);
+            console.error(`Failed to refresh ${connection.provider} token for user ${connection.user_id}`);
             continue;
           }
         } else {
-          console.log(`Token expired for user ${connection.user_id} and no refresh token, skipping`);
+          console.log(`Token expired for user ${connection.user_id} (${connection.provider}) and no refresh token, skipping`);
           continue;
         }
       }
@@ -444,7 +611,7 @@ serve(async (req) => {
         // Use selected_calendar_ids if available, otherwise fall back to ["primary"]
         const calendarIds = connection.selected_calendar_ids?.length ? connection.selected_calendar_ids : ["primary"];
 
-        console.log(`Checking calendars for participant ${connection.user_id}:`, calendarIds);
+        console.log(`Checking ${connection.provider} calendars for participant ${connection.user_id}:`, calendarIds);
 
         const { busy } = await getBusyIntervalsWithRetry(
           connection,
