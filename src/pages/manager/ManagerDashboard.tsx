@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -23,7 +24,8 @@ import {
   LogOut,
   Loader2,
   UserCheck,
-  UserX
+  UserX,
+  Home
 } from 'lucide-react';
 import { formatBusinessRole, getPrimaryRoleLabel, type BusinessRole, type SecurityRole } from '@/lib/roles';
 import { PrimaryRoleBadge, StatusBadge } from '@/components/ui/role-badge';
@@ -53,6 +55,7 @@ export default function ManagerDashboard() {
   const { signOut } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [newCompanyName, setNewCompanyName] = useState('');
@@ -210,10 +213,16 @@ export default function ManagerDashboard() {
               <p className="text-sm text-muted-foreground">System Administration</p>
             </div>
           </div>
-          <Button variant="outline" onClick={() => signOut()}>
-            <LogOut className="w-4 h-4 mr-2" />
-            Sign Out
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => navigate('/dashboard')}>
+              <Home className="w-4 h-4 mr-2" />
+              Dashboard
+            </Button>
+            <Button variant="outline" onClick={() => signOut()}>
+              <LogOut className="w-4 h-4 mr-2" />
+              Sign Out
+            </Button>
+          </div>
         </div>
       </header>
 
