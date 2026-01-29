@@ -1,187 +1,153 @@
 
 
-# Embeddable Lawmatics Intake Forms
+# Add Calendar Provider Selection to Create Booking Request
 
 ## Overview
-Create two standalone, embeddable HTML pages designed to be placed as iframes in Lawmatics custom form instruction blocks. These forms will collect client intake data and submit it directly to Lawmatics via backend Edge Functions, with dynamic dropdown options fetched from the Lawmatics API.
+When a user has both Google Calendar and Microsoft Outlook connected, they should be able to choose which calendar provider to use for availability checking and event creation when creating a booking request.
 
-## Form Structure (Based on Screenshots)
-
-### Page 1: Contact Information (`/intake/contact`)
-Fields from the screenshots:
-| Field | Type | Required | Lawmatics API Field |
-|-------|------|----------|---------------------|
-| First Name | text | Yes | `first_name` |
-| Middle Name | text | No | `middle_name` |
-| Last Name | text | Yes | `last_name` |
-| Phone (Primary) | tel | No | `phone` |
-| Email (Primary) | email | Yes | `email` |
-| Is this an Existing Client? | dropdown | Yes | Custom field / logic flag |
-| Next Steps | dropdown | Yes | `stage` or custom field |
-| Notes or Message | textarea | No | `notes` |
-
-### Page 2: Intake Information (`/intake/details`)
-Fields from the screenshots:
-| Field | Type | Required | Lawmatics API Field |
-|-------|------|----------|---------------------|
-| Preferred Name | text | No | `preferred_name` or custom |
-| Gender | dropdown | No | `gender` or custom |
-| Address (Primary) - Street | text | No | `address_line_1` |
-| Address (Primary) - Street2 | text | No | `address_line_2` |
-| City | text | No | `city` |
-| State | dropdown | No | `state` |
-| Zipcode | text | No | `zip` |
-| Practice Area | dropdown | Yes | `practice_area_id` (dynamic from Lawmatics) |
-| How Did You Hear About Us? | dropdown | Yes | `source` or `referral_source` (dynamic from Lawmatics) |
-| Is there a second client? | dropdown | Yes | Custom field |
-| Additional People (Conflict Check) | textarea | No | `notes` or custom |
-| Matter's Description | textarea | No | `case_title` / `notes` |
-| Intake Notes | textarea | No | `notes` |
-| Next Steps | dropdown | Yes | `stage` or custom |
-
-## Architecture
-
-```text
-+-------------------+     +------------------------+     +------------------+
-|  Intake Form      |     |  Edge Functions        |     |  Lawmatics API   |
-|  (iframe pages)   | --> |  lawmatics-intake-*    | --> |  /v1/contacts    |
-|                   |     |                        |     |  /v1/prospects   |
-+-------------------+     +------------------------+     +------------------+
-                               |
-                               v
-                    +----------------------+
-                    | lawmatics_connections|
-                    | (access_token)       |
-                    +----------------------+
-```
+## Current State
+- The `calendar_connections` table stores connections for both `google` and `microsoft` providers
+- The `RequestNew.tsx` page currently only checks for Google connections when displaying calendar status badges
+- The `confirm-booking` edge function only creates Google Calendar events
+- Backend availability functions (`public-available-slots`, `check-availability`) already support both providers dynamically
+- The `meetings` table has `m365_event_id` column but no field to store the preferred calendar provider
 
 ## Implementation Plan
 
-### Step 1: Create Edge Functions for Reference Data
+### Step 1: Database Schema Update
+Add a `calendar_provider` column to the `meetings` table to store the user's choice:
+- Type: `calendar_provider` enum (`google` | `microsoft`)
+- Nullable: Yes (defaults to null, meaning auto-detect or use available provider)
 
-Create new edge functions to fetch dynamic dropdown options from Lawmatics:
+### Step 2: Frontend Changes (RequestNew.tsx)
 
-**1.1. `lawmatics-list-practice-areas`**
-- Endpoint: `GET /v1/practice_areas` (or similar)
-- Returns: `{ items: [{ id, name }] }`
-- Cache in `lawmatics_reference_data` table
-
-**1.2. `lawmatics-list-sources`**
-- Endpoint: `GET /v1/sources` or `/v1/referral_sources`
-- Returns: `{ items: [{ id, name }] }`
-- Cache in `lawmatics_reference_data` table
-
-**1.3. `lawmatics-list-stages`** (for Next Steps dropdown)
-- Endpoint: `GET /v1/stages` or `/v1/pipelines`
-- Returns: `{ items: [{ id, name }] }`
-
-### Step 2: Create Intake Submission Edge Function
-
-**2.1. `lawmatics-submit-intake`**
-- Public endpoint (no auth required - for iframe use)
-- Accepts combined data from both form pages
-- Calls Lawmatics API to:
-  1. Create or find Contact (`POST /v1/contacts`)
-  2. Create Matter/Prospect (`POST /v1/prospects`)
-  3. Attach all collected fields
-- Returns success/failure response
-
-### Step 3: Create Frontend Pages
-
-**3.1. Page 1: Contact Information**
-- Route: `/intake/contact`
-- File: `src/pages/intake/IntakeContact.tsx`
-- Minimal layout (no header/nav for iframe embedding)
-- Form fields with validation
-- Stores data in sessionStorage for Page 2 access
-- Navigation to Page 2
-
-**3.2. Page 2: Intake Details**
-- Route: `/intake/details`
-- File: `src/pages/intake/IntakeDetails.tsx`
-- Fetches dynamic options via public edge functions
-- Combines Page 1 data from sessionStorage
-- Submits all data to `lawmatics-submit-intake`
-- Shows success/error state
-
-**3.3. Shared Components**
-- `src/components/intake/IntakeFormLayout.tsx` - Clean iframe-friendly wrapper
-- `src/components/intake/IntakeSelect.tsx` - Styled dropdown for consistency
-- Uses existing UI components (Input, Select, Textarea, Button)
-
-### Step 4: Add Routes
-
-Update `src/App.tsx` to add public routes:
+**2.1 Update CompanyMember Interface**
 ```typescript
-<Route path="/intake/contact" element={<IntakeContact />} />
-<Route path="/intake/details" element={<IntakeDetails />} />
+interface CompanyMember {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  hasGoogleConnection: boolean;
+  hasMicrosoftConnection: boolean;  // NEW
+}
 ```
 
-## Field Mappings to Lawmatics API
-
-Based on Lawmatics API documentation patterns observed in the codebase:
-
-**Contact Fields (POST /v1/contacts)**:
-- `first_name`, `middle_name`, `last_name`
-- `email`, `phone`
-- `address_line_1`, `address_line_2`, `city`, `state`, `zip`
-- `preferred_name`, `gender`
-- `source_id` or `referral_source`
-
-**Matter/Prospect Fields (POST /v1/prospects)**:
-- `first_name`, `last_name`, `email` (for matching)
-- `case_title` (from Matter's Description)
-- `practice_area_id`
-- `notes` (combined intake notes)
-- `stage_id` (Next Steps)
-
-## Styling Considerations
-
-- Clean, minimal design suitable for iframe embedding
-- White background with proper contrast
-- Responsive for various iframe sizes
-- Match the styling shown in screenshots (blue navigation, red required field indicators)
-- Use existing Tailwind/shadcn components
-
-## Data Flow
-
-```text
-1. User opens Page 1 (Contact Information)
-2. User fills out form, clicks "Next"
-3. Data stored in sessionStorage
-4. User navigates to Page 2 (Intake Details)
-5. Dropdown options fetched from Edge Functions
-6. User completes form, clicks "Submit"
-7. Combined data sent to lawmatics-submit-intake
-8. Edge function creates Contact + Matter in Lawmatics
-9. Success/error message displayed to user
+**2.2 Update FormData Interface**
+```typescript
+interface FormData {
+  // ... existing fields
+  calendarProvider: "google" | "microsoft" | "";  // NEW
+}
 ```
 
-## Security Considerations
+**2.3 Update Company Members Query**
+Fetch both Google and Microsoft connections:
+```typescript
+const { data: googleConnections } = await supabase
+  .from("calendar_connections")
+  .select("user_id")
+  .eq("provider", "google");
 
-- Edge functions for reference data can be public (read-only cached data)
-- Intake submission function validates all inputs
-- No sensitive data exposed in frontend
-- Lawmatics access token stays in backend only
-- Rate limiting recommended for production
+const { data: microsoftConnections } = await supabase
+  .from("calendar_connections")
+  .select("user_id")
+  .eq("provider", "microsoft");
 
-## Files to Create
+// Populate hasGoogleConnection and hasMicrosoftConnection
+```
 
-| File | Purpose |
-|------|---------|
-| `src/pages/intake/IntakeContact.tsx` | Page 1 - Contact form |
-| `src/pages/intake/IntakeDetails.tsx` | Page 2 - Intake details form |
-| `src/components/intake/IntakeFormLayout.tsx` | Shared layout wrapper |
-| `supabase/functions/lawmatics-list-practice-areas/index.ts` | Fetch practice areas |
-| `supabase/functions/lawmatics-list-sources/index.ts` | Fetch referral sources |
-| `supabase/functions/lawmatics-list-stages/index.ts` | Fetch stages/next steps |
-| `supabase/functions/lawmatics-submit-intake/index.ts` | Submit intake to Lawmatics |
+**2.4 Add Calendar Provider Selection UI**
+On the Participants step (Step 2), add a calendar provider dropdown:
+- Only show if at least one participant has both Google and Microsoft connections
+- Options: "Google Calendar" or "Microsoft Outlook"
+- Default to the provider that all selected participants have connected
 
-## Files to Modify
+**2.5 Update Calendar Status Badges**
+Show which calendars each participant has connected:
+- Green badge for connected providers
+- Warning badge if selected provider isn't connected for a participant
+
+**2.6 Update Warning Messages**
+Change "Google Calendar" references to be dynamic based on selected provider
+
+### Step 3: Backend Changes (confirm-booking/index.ts)
+
+**3.1 Add Microsoft Token Refresh Helper**
+Create `refreshMicrosoftTokenIfNeeded` function similar to Google's implementation
+
+**3.2 Add Microsoft Event Creation Function**
+Create `createMicrosoftCalendarEventForUser` function:
+- Use Microsoft Graph API: `POST /me/calendars/{calendarId}/events`
+- Handle token refresh with retry on 401
+- Store event ID in meeting record (`m365_event_id`)
+
+**3.3 Add Batch Microsoft Event Creation**
+Create `createMicrosoftCalendarEventsForAllParticipants` function:
+- Similar pattern to Google's batch creation
+- Create a `meeting_microsoft_events` table (optional) or use `m365_event_id` in meetings table
+
+**3.4 Update Main Handler Logic**
+Branch between Google and Microsoft event creation based on meeting's `calendar_provider` preference:
+```typescript
+const calendarProvider = meeting.calendar_provider || "google";
+if (calendarProvider === "microsoft") {
+  // Create Microsoft events
+} else {
+  // Create Google events (existing logic)
+}
+```
+
+### Step 4: Update Meeting Insert
+Store the selected calendar provider in the meetings table:
+```typescript
+.insert({
+  // ... existing fields
+  calendar_provider: formData.calendarProvider || null,
+})
+```
+
+## File Changes Summary
 
 | File | Changes |
 |------|---------|
-| `src/App.tsx` | Add intake routes |
-| `supabase/config.toml` | Add new edge function configs |
-| `openapi.yaml` | Document new endpoints |
+| Database Migration | Add `calendar_provider` column to `meetings` table |
+| `src/pages/RequestNew.tsx` | Update interface, query, and add provider selection UI |
+| `supabase/functions/confirm-booking/index.ts` | Add Microsoft event creation logic and provider branching |
+
+## UI/UX Design
+
+### Calendar Provider Selection (Participants Step)
+```
+┌─────────────────────────────────────────────────┐
+│ Calendar Provider                               │
+│ Select which calendar to use for this booking   │
+│                                                 │
+│ ┌─────────────────────────────────────────────┐ │
+│ │ 📅 Google Calendar                     ▼    │ │
+│ └─────────────────────────────────────────────┘ │
+│                                                 │
+│ Options:                                        │
+│ • Google Calendar                               │
+│ • Microsoft Outlook                             │
+└─────────────────────────────────────────────────┘
+```
+
+### Updated Participant Badge Display
+```
+┌─────────────────────────────────────────────────┐
+│ John Doe (john@example.com)                     │
+│   ✓ Google   ✓ Microsoft                        │
+├─────────────────────────────────────────────────┤
+│ Jane Smith (jane@example.com)                   │
+│   ✓ Google   ✗ Microsoft                        │
+└─────────────────────────────────────────────────┘
+```
+
+## Technical Considerations
+
+1. **Backward Compatibility**: If `calendar_provider` is null, default to Google (existing behavior)
+2. **Mixed Providers**: If some participants only have Google and user selects Microsoft, show a warning that those participants' calendars won't be updated
+3. **Availability Checks**: The backend already supports both providers for availability - no changes needed there
+4. **Event Tracking**: Consider creating a `meeting_microsoft_events` table similar to `meeting_google_events` for tracking Microsoft event IDs per participant
 
