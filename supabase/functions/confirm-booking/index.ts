@@ -40,12 +40,24 @@ interface MeetingDetails {
   lawmatics_appointment_id: string | null;
   lawmatics_contact_id: string | null;
   lawmatics_matter_id: string | null;
+  calendar_provider: "google" | "microsoft" | null;
   meeting_types?: { name: string; lawmatics_event_type_id: string | null } | null;
   rooms?: { name: string; resource_email: string; lawmatics_location_id: string | null } | null;
   host_attorney?: { name: string; email: string } | null;
 }
 
 interface GoogleEventResult {
+  user_id: string;
+  user_email?: string;
+  calendar_id?: string;
+  event_id?: string;
+  created?: boolean;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+}
+
+interface MicrosoftEventResult {
   user_id: string;
   user_email?: string;
   calendar_id?: string;
@@ -508,6 +520,415 @@ async function deleteGoogleEventsForMeeting(
   }
 }
 
+// === MICROSOFT CALENDAR FUNCTIONS ===
+
+// Helper to refresh Microsoft OAuth token if expired
+async function refreshMicrosoftTokenIfNeeded(
+  supabase: any,
+  calendarConnection: any
+): Promise<{ accessToken: string | null; error?: string }> {
+  const MICROSOFT_CLIENT_ID = Deno.env.get("MICROSOFT_CLIENT_ID");
+  const MICROSOFT_CLIENT_SECRET = Deno.env.get("MICROSOFT_CLIENT_SECRET");
+
+  if (!MICROSOFT_CLIENT_ID || !MICROSOFT_CLIENT_SECRET) {
+    return { accessToken: null, error: "Microsoft OAuth not configured" };
+  }
+
+  let accessToken = calendarConnection.access_token;
+
+  // Check if token is expired
+  if (calendarConnection.token_expires_at && new Date(calendarConnection.token_expires_at) < new Date()) {
+    if (!calendarConnection.refresh_token) {
+      return { accessToken: null, error: "Token expired and no refresh token available" };
+    }
+
+    try {
+      const tokenResponse = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: MICROSOFT_CLIENT_ID,
+          client_secret: MICROSOFT_CLIENT_SECRET,
+          refresh_token: calendarConnection.refresh_token,
+          grant_type: "refresh_token",
+        }),
+      });
+
+      if (!tokenResponse.ok) {
+        return { accessToken: null, error: "Failed to refresh Microsoft token" };
+      }
+
+      const tokens = await tokenResponse.json();
+      accessToken = tokens.access_token;
+
+      // Update stored token (non-blocking)
+      await supabase
+        .from("calendar_connections")
+        .update({
+          access_token: tokens.access_token,
+          token_expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
+          ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", calendarConnection.id);
+    } catch (e) {
+      console.error("Microsoft token refresh error:", e);
+      return { accessToken: null, error: "Token refresh failed" };
+    }
+  }
+
+  return { accessToken };
+}
+
+// Create Microsoft Calendar event for a SINGLE user
+async function createMicrosoftCalendarEventForUser(
+  supabase: any,
+  meeting: MeetingDetails,
+  userId: string,
+  userEmail: string,
+  allParticipantEmails: string[],
+  hostAttorney: { name: string; email: string } | null,
+  startDatetime: string,
+  endDatetime: string
+): Promise<MicrosoftEventResult> {
+  try {
+    // Get this user's Microsoft calendar connection
+    const { data: calendarConnection } = await supabase
+      .from("calendar_connections")
+      .select("*")
+      .eq("provider", "microsoft")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!calendarConnection) {
+      return { 
+        user_id: userId, 
+        user_email: userEmail,
+        error: "No Microsoft calendar connection for this user",
+        created: false 
+      };
+    }
+
+    // Refresh token if needed
+    const { accessToken, error: tokenError } = await refreshMicrosoftTokenIfNeeded(supabase, calendarConnection);
+    if (!accessToken) {
+      return { 
+        user_id: userId, 
+        user_email: userEmail,
+        error: tokenError || "Failed to get access token",
+        created: false 
+      };
+    }
+
+    // Determine target calendar (use selected calendar or default)
+    let targetCalendarId = "primary";
+    if (calendarConnection.selected_calendar_ids?.length > 0) {
+      targetCalendarId = calendarConnection.selected_calendar_ids[0];
+    }
+
+    // Build attendees list for Microsoft Graph API
+    const attendees: Array<{ emailAddress: { address: string; name?: string }; type: string }> = [];
+    
+    // Add ALL internal participants as attendees
+    for (const email of allParticipantEmails) {
+      if (email) {
+        attendees.push({ 
+          emailAddress: { address: email }, 
+          type: "required" 
+        });
+      }
+    }
+
+    // Add external attendees (client)
+    for (const ext of meeting.external_attendees || []) {
+      if (ext.email) {
+        attendees.push({ 
+          emailAddress: { address: ext.email, name: ext.name }, 
+          type: "required" 
+        });
+      }
+    }
+
+    const client = meeting.external_attendees?.[0];
+    const eventSubject = `${meeting.meeting_types?.name || "Meeting"} - ${client?.name || "Client"} - ${hostAttorney?.name || "Attorney"}`;
+
+    // Build description
+    const bodyParts = [
+      `Meeting Type: ${meeting.meeting_types?.name || "Meeting"}`,
+      `Location: ${meeting.location_mode === "InPerson" ? (meeting.rooms?.name || "In Person") : "Zoom"}`,
+    ];
+    if (meeting.location_mode === "InPerson" && meeting.rooms?.name) {
+      bodyParts.push(`Room: ${meeting.rooms.name}`);
+    }
+    if (allParticipantEmails.length > 1) {
+      bodyParts.push(`Participants: ${allParticipantEmails.join(", ")}`);
+    }
+
+    // Microsoft Graph API event format
+    const eventBody = {
+      subject: eventSubject,
+      start: {
+        dateTime: startDatetime,
+        timeZone: meeting.timezone,
+      },
+      end: {
+        dateTime: endDatetime,
+        timeZone: meeting.timezone,
+      },
+      attendees,
+      body: {
+        contentType: "text",
+        content: bodyParts.join("\n"),
+      },
+      isReminderOn: true,
+      reminderMinutesBeforeStart: 15,
+    };
+
+    console.log(`Creating Microsoft Calendar event for user ${userId} on calendar: ${targetCalendarId}`);
+
+    // Use different endpoint for primary vs specific calendar
+    const calendarEndpoint = targetCalendarId === "primary"
+      ? "https://graph.microsoft.com/v1.0/me/events"
+      : `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(targetCalendarId)}/events`;
+
+    const calendarResponse = await fetch(calendarEndpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(eventBody),
+    });
+
+    if (!calendarResponse.ok) {
+      const errorText = await calendarResponse.text();
+      console.error(`Microsoft Calendar API error for user ${userId}:`, errorText);
+      
+      // Retry on 401 with token refresh
+      if (calendarResponse.status === 401) {
+        const { accessToken: newToken } = await refreshMicrosoftTokenIfNeeded(supabase, calendarConnection);
+        if (newToken) {
+          const retryResponse = await fetch(calendarEndpoint, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${newToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(eventBody),
+          });
+          
+          if (retryResponse.ok) {
+            const eventData = await retryResponse.json();
+            console.log(`Microsoft Calendar event created for user ${userId} (after retry):`, eventData.id);
+            return { 
+              user_id: userId, 
+              user_email: userEmail,
+              calendar_id: targetCalendarId,
+              event_id: eventData.id,
+              created: true 
+            };
+          }
+        }
+      }
+      
+      return { 
+        user_id: userId, 
+        user_email: userEmail,
+        calendar_id: targetCalendarId,
+        error: `Microsoft Calendar API error: ${calendarResponse.status}`,
+        created: false 
+      };
+    }
+
+    const eventData = await calendarResponse.json();
+    console.log(`Microsoft Calendar event created for user ${userId}:`, eventData.id);
+    
+    return { 
+      user_id: userId, 
+      user_email: userEmail,
+      calendar_id: targetCalendarId,
+      event_id: eventData.id,
+      created: true 
+    };
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error(`Microsoft Calendar exception for user ${userId}:`, errMsg);
+    return {
+      user_id: userId,
+      user_email: userEmail,
+      error: errMsg,
+      created: false
+    };
+  }
+}
+
+// Create Microsoft Calendar events for ALL participants with idempotency
+async function createMicrosoftCalendarEventsForAllParticipants(
+  supabase: any,
+  meeting: MeetingDetails,
+  participants: Array<{ id: string; email: string }>,
+  hostAttorney: { name: string; email: string } | null,
+  startDatetime: string,
+  endDatetime: string,
+  options?: { forceCreate?: boolean }
+): Promise<{ results: MicrosoftEventResult[]; warnings: string[] }> {
+  const results: MicrosoftEventResult[] = [];
+  const warnings: string[] = [];
+  const allParticipantEmails = participants.map(p => p.email).filter(Boolean);
+  const forceCreate = options?.forceCreate ?? false;
+
+  console.log(`[createMicrosoftCalendarEventsForAllParticipants] forceCreate=${forceCreate}, participants=${participants.length}`);
+
+  try {
+    // Check for existing events for this meeting (idempotency) - skip check if forceCreate
+    let existingByUser = new Map<string, { calendar_id: string; event_id: string }>();
+    
+    if (!forceCreate) {
+      const { data: existingEvents } = await supabase
+        .from("meeting_microsoft_events")
+        .select("user_id, microsoft_calendar_id, microsoft_event_id")
+        .eq("meeting_id", meeting.id);
+
+      for (const ev of existingEvents || []) {
+        existingByUser.set(ev.user_id, { 
+          calendar_id: ev.microsoft_calendar_id, 
+          event_id: ev.microsoft_event_id 
+        });
+      }
+      console.log(`[createMicrosoftCalendarEventsForAllParticipants] Found ${existingByUser.size} existing events`);
+    } else {
+      console.log(`[createMicrosoftCalendarEventsForAllParticipants] Bypassing idempotency check (forceCreate=true)`);
+    }
+
+    for (const participant of participants) {
+      // Check idempotency - skip if event already exists for this user (unless forceCreate)
+      const existing = existingByUser.get(participant.id);
+      if (existing) {
+        console.log(`Microsoft event already exists for user ${participant.id}, skipping`);
+        results.push({
+          user_id: participant.id,
+          user_email: participant.email,
+          calendar_id: existing.calendar_id,
+          event_id: existing.event_id,
+          skipped: true,
+          reason: "Microsoft event already exists for this meeting"
+        });
+        continue;
+      }
+
+      // Create event for this participant
+      const result = await createMicrosoftCalendarEventForUser(
+        supabase,
+        meeting,
+        participant.id,
+        participant.email,
+        allParticipantEmails,
+        hostAttorney,
+        startDatetime,
+        endDatetime
+      );
+
+      results.push(result);
+
+      if (result.created && result.event_id) {
+        // Persist to meeting_microsoft_events table using UPSERT
+        const { error: upsertError } = await supabase
+          .from("meeting_microsoft_events")
+          .upsert(
+            {
+              meeting_id: meeting.id,
+              user_id: participant.id,
+              microsoft_calendar_id: result.calendar_id,
+              microsoft_event_id: result.event_id,
+            },
+            { onConflict: "meeting_id,user_id" }
+          );
+
+        if (upsertError) {
+          console.error(`[confirm-booking] Failed to persist Microsoft event for meeting ${meeting.id}, user ${participant.id}:`, upsertError.message);
+          warnings.push(`Calendar event created but tracking failed for ${participant.email}`);
+        } else {
+          console.log(`[confirm-booking] Persisted Microsoft event ${result.event_id} for meeting ${meeting.id}, user ${participant.id}, calendar ${result.calendar_id}`);
+        }
+      } else if (result.error) {
+        warnings.push(`Microsoft Calendar for ${participant.email}: ${result.error}`);
+      }
+    }
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error("createMicrosoftCalendarEventsForAllParticipants error:", errMsg);
+    warnings.push(`Microsoft Calendar batch error: ${errMsg}`);
+  }
+
+  const createdCount = results.filter(r => r.created).length;
+  const skippedCount = results.filter(r => r.skipped).length;
+  console.log(`[createMicrosoftCalendarEventsForAllParticipants] Done: created=${createdCount}, skipped=${skippedCount}`);
+
+  return { results, warnings };
+}
+
+async function deleteMicrosoftEventsForMeeting(
+  supabase: any,
+  meetingId: string,
+  warnings: string[],
+  microsoftEvents?: Array<{ user_id: string; microsoft_calendar_id: string; microsoft_event_id: string }>
+): Promise<void> {
+  const events =
+    microsoftEvents ??
+    (
+      await supabase
+        .from("meeting_microsoft_events")
+        .select("user_id, microsoft_calendar_id, microsoft_event_id")
+        .eq("meeting_id", meetingId)
+    ).data;
+
+  for (const ev of events || []) {
+    const { data: connection } = await supabase
+      .from("calendar_connections")
+      .select("*")
+      .eq("provider", "microsoft")
+      .eq("user_id", ev.user_id)
+      .maybeSingle();
+
+    if (!connection) {
+      warnings.push(`Microsoft connection missing for user ${ev.user_id}.`);
+      continue;
+    }
+
+    const { accessToken, error: tokenError } = await refreshMicrosoftTokenIfNeeded(supabase, connection);
+    if (!accessToken) {
+      warnings.push(tokenError || `Microsoft token error for user ${ev.user_id}.`);
+      continue;
+    }
+
+    try {
+      const res = await fetch(
+        `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(ev.microsoft_event_id)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+
+      if (!res.ok && res.status !== 404 && res.status !== 410) {
+        warnings.push(`Microsoft event delete failed for user ${ev.user_id} (${res.status}).`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`Microsoft event delete failed for user ${ev.user_id}: ${msg}`);
+    }
+  }
+
+  const idsToDelete = (events || []).map(({ microsoft_event_id }: { microsoft_event_id: string }) => microsoft_event_id).filter(Boolean);
+  if (idsToDelete.length > 0) {
+    await supabase
+      .from("meeting_microsoft_events")
+      .delete()
+      .eq("meeting_id", meetingId)
+      .in("microsoft_event_id", idsToDelete);
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -527,6 +948,8 @@ serve(async (req) => {
     lawmatics_debug?: any;
     lawmatics?: any;
     google?: any;
+    microsoft?: any;
+    calendar_provider?: string;
     phase1_completed?: boolean;
     phase2_completed?: boolean;
   } = {
@@ -718,10 +1141,16 @@ serve(async (req) => {
 
     let googleResults: GoogleEventResult[] = [];
     let googleWarnings: string[] = [];
+    let microsoftResults: MicrosoftEventResult[] = [];
+    let microsoftWarnings: string[] = [];
     let lawmaticsAppointmentId: string | null = null;
     let lawmaticsContactId: string | null = null;
     let lawmaticsMatterId: string | null = null;
     let lawmaticsContactError: string | null = null;
+    
+    // Determine which calendar provider to use
+    const calendarProvider = (meeting.calendar_provider as "google" | "microsoft" | null) || "google";
+    console.log(`[confirm-booking] Using calendar provider: ${calendarProvider}`);
 
     try {
       // Fetch room_reservation_mode setting
@@ -1124,60 +1553,112 @@ serve(async (req) => {
         response.warnings!.push(`[lawmatics] ${errMsg}`);
       }
 
-      // === GOOGLE CALENDAR INTEGRATION (wrapped in try/catch) ===
-      try {
-        // For reschedules, snapshot the old events first so we can delete ONLY the previous ones
-        // after the new booking + event creation succeeds.
-        console.log(`[confirm-booking] Google Calendar integration: isReschedule=${isReschedule}`);
-        
-        const { data: oldGoogleEvents } = isReschedule
-          ? await supabase
-              .from("meeting_google_events")
-              .select("user_id, google_calendar_id, google_event_id")
-              .eq("meeting_id", meeting.id)
-          : { data: null };
-
-        if (isReschedule && oldGoogleEvents) {
-          console.log(`[confirm-booking] Reschedule: found ${oldGoogleEvents.length} old Google events to cleanup after new creation`);
-        }
-
-        if (participants.length > 0) {
-          console.log(`[confirm-booking] Creating Google Calendar events for ${participants.length} participants`);
+      // === CALENDAR INTEGRATION (wrapped in try/catch) ===
+      // Branch based on calendar_provider preference
+      if (calendarProvider === "microsoft") {
+        // === MICROSOFT CALENDAR INTEGRATION ===
+        try {
+          console.log(`[confirm-booking] Microsoft Calendar integration: isReschedule=${isReschedule}`);
           
-          // For reschedules, force creation of new events (bypass idempotency check)
-          const googleResponse = await createGoogleCalendarEventsForAllParticipants(
-            supabase,
-            meeting as unknown as MeetingDetails,
-            participants,
-            hostAttorney,
-            startDatetime,
-            endDatetime,
-            { forceCreate: isReschedule } // Bypass idempotency for reschedules
-          );
-          googleResults = googleResponse.results;
-          googleWarnings = googleResponse.warnings;
+          const { data: oldMicrosoftEvents } = isReschedule
+            ? await supabase
+                .from("meeting_microsoft_events")
+                .select("user_id, microsoft_calendar_id, microsoft_event_id")
+                .eq("meeting_id", meeting.id)
+            : { data: null };
 
-          for (const gw of googleWarnings) {
-            response.warnings!.push(`[google] ${gw}`);
+          if (isReschedule && oldMicrosoftEvents) {
+            console.log(`[confirm-booking] Reschedule: found ${oldMicrosoftEvents.length} old Microsoft events to cleanup after new creation`);
           }
-        }
 
-        // Now that new events have been created, delete the old events (reschedule only)
-        // Only cleanup if we actually created at least one new event
-        const newEventsCreated = googleResults.filter(r => r.created).length;
-        if (isReschedule && oldGoogleEvents && oldGoogleEvents.length > 0) {
-          if (newEventsCreated > 0) {
-            console.log(`[confirm-booking] Reschedule cleanup: deleting ${oldGoogleEvents.length} old Google events (${newEventsCreated} new events created)`);
-            await deleteGoogleEventsForMeeting(supabase, meeting.id, response.warnings!, oldGoogleEvents);
-          } else {
-            console.warn(`[confirm-booking] Reschedule: No new Google events created, keeping old events to prevent data loss`);
-            response.warnings!.push("Reschedule: new Google events were not created; keeping previous Google events to prevent data loss.");
+          if (participants.length > 0) {
+            console.log(`[confirm-booking] Creating Microsoft Calendar events for ${participants.length} participants`);
+            
+            const microsoftResponse = await createMicrosoftCalendarEventsForAllParticipants(
+              supabase,
+              meeting as unknown as MeetingDetails,
+              participants,
+              hostAttorney,
+              startDatetime,
+              endDatetime,
+              { forceCreate: isReschedule }
+            );
+            microsoftResults = microsoftResponse.results;
+            microsoftWarnings = microsoftResponse.warnings;
+
+            for (const mw of microsoftWarnings) {
+              response.warnings!.push(`[microsoft] ${mw}`);
+            }
           }
+
+          // Cleanup old events on reschedule
+          const newMsEventsCreated = microsoftResults.filter(r => r.created).length;
+          if (isReschedule && oldMicrosoftEvents && oldMicrosoftEvents.length > 0) {
+            if (newMsEventsCreated > 0) {
+              console.log(`[confirm-booking] Reschedule cleanup: deleting ${oldMicrosoftEvents.length} old Microsoft events (${newMsEventsCreated} new events created)`);
+              await deleteMicrosoftEventsForMeeting(supabase, meeting.id, response.warnings!, oldMicrosoftEvents);
+            } else {
+              console.warn(`[confirm-booking] Reschedule: No new Microsoft events created, keeping old events to prevent data loss`);
+              response.warnings!.push("Reschedule: new Microsoft events were not created; keeping previous Microsoft events to prevent data loss.");
+            }
+          }
+        } catch (microsoftErr) {
+          const errMsg = microsoftErr instanceof Error ? microsoftErr.message : String(microsoftErr);
+          console.error("Microsoft Calendar integration error (non-blocking):", errMsg);
+          response.warnings!.push(`[microsoft] ${errMsg}`);
         }
-      } catch (googleErr) {
-        const errMsg = googleErr instanceof Error ? googleErr.message : String(googleErr);
-        console.error("Google Calendar integration error (non-blocking):", errMsg);
-        response.warnings!.push(`[google] ${errMsg}`);
+      } else {
+        // === GOOGLE CALENDAR INTEGRATION (default) ===
+        try {
+          console.log(`[confirm-booking] Google Calendar integration: isReschedule=${isReschedule}`);
+          
+          const { data: oldGoogleEvents } = isReschedule
+            ? await supabase
+                .from("meeting_google_events")
+                .select("user_id, google_calendar_id, google_event_id")
+                .eq("meeting_id", meeting.id)
+            : { data: null };
+
+          if (isReschedule && oldGoogleEvents) {
+            console.log(`[confirm-booking] Reschedule: found ${oldGoogleEvents.length} old Google events to cleanup after new creation`);
+          }
+
+          if (participants.length > 0) {
+            console.log(`[confirm-booking] Creating Google Calendar events for ${participants.length} participants`);
+            
+            const googleResponse = await createGoogleCalendarEventsForAllParticipants(
+              supabase,
+              meeting as unknown as MeetingDetails,
+              participants,
+              hostAttorney,
+              startDatetime,
+              endDatetime,
+              { forceCreate: isReschedule }
+            );
+            googleResults = googleResponse.results;
+            googleWarnings = googleResponse.warnings;
+
+            for (const gw of googleWarnings) {
+              response.warnings!.push(`[google] ${gw}`);
+            }
+          }
+
+          // Cleanup old events on reschedule
+          const newEventsCreated = googleResults.filter(r => r.created).length;
+          if (isReschedule && oldGoogleEvents && oldGoogleEvents.length > 0) {
+            if (newEventsCreated > 0) {
+              console.log(`[confirm-booking] Reschedule cleanup: deleting ${oldGoogleEvents.length} old Google events (${newEventsCreated} new events created)`);
+              await deleteGoogleEventsForMeeting(supabase, meeting.id, response.warnings!, oldGoogleEvents);
+            } else {
+              console.warn(`[confirm-booking] Reschedule: No new Google events created, keeping old events to prevent data loss`);
+              response.warnings!.push("Reschedule: new Google events were not created; keeping previous Google events to prevent data loss.");
+            }
+          }
+        } catch (googleErr) {
+          const errMsg = googleErr instanceof Error ? googleErr.message : String(googleErr);
+          console.error("Google Calendar integration error (non-blocking):", errMsg);
+          response.warnings!.push(`[google] ${errMsg}`);
+        }
       }
 
 
@@ -1228,6 +1709,7 @@ serve(async (req) => {
     }
 
     // Add integration info to response
+    response.calendar_provider = calendarProvider;
     response.lawmatics_debug = lawmatics_debug;
     response.lawmatics = {
       appointment_id: lawmaticsAppointmentId,
@@ -1241,6 +1723,15 @@ serve(async (req) => {
         created: googleResults.filter((r) => r.created).length,
         skipped: googleResults.filter((r) => r.skipped).length,
         failed: googleResults.filter((r) => r.error && !r.skipped).length,
+      },
+    };
+    response.microsoft = {
+      results: microsoftResults,
+      summary: {
+        total: microsoftResults.length,
+        created: microsoftResults.filter((r) => r.created).length,
+        skipped: microsoftResults.filter((r) => r.skipped).length,
+        failed: microsoftResults.filter((r) => r.error && !r.skipped).length,
       },
     };
 

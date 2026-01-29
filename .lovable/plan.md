@@ -1,16 +1,16 @@
 
 
-# Add Calendar Provider Selection to Create Booking Request
+# ✅ COMPLETED: Add Calendar Provider Selection to Create Booking Request
 
 ## Overview
-When a user has both Google Calendar and Microsoft Outlook connected, they should be able to choose which calendar provider to use for availability checking and event creation when creating a booking request.
+When a user has both Google Calendar and Microsoft Outlook connected, they can now choose which calendar provider to use for availability checking and event creation when creating a booking request.
 
-## Current State
-- The `calendar_connections` table stores connections for both `google` and `microsoft` providers
-- The `RequestNew.tsx` page currently only checks for Google connections when displaying calendar status badges
-- The `confirm-booking` edge function only creates Google Calendar events
-- Backend availability functions (`public-available-slots`, `check-availability`) already support both providers dynamically
-- The `meetings` table has `m365_event_id` column but no field to store the preferred calendar provider
+## Implementation Status: COMPLETE
+
+### What was implemented:
+1. **Database Migration**: Added `calendar_provider` column to `meetings` table and created `meeting_microsoft_events` table for tracking Microsoft events
+2. **Frontend (RequestNew.tsx)**: Added calendar provider selection dropdown, dual-provider badges for participants, and dynamic warnings
+3. **Backend (confirm-booking)**: Added Microsoft Calendar event creation with token refresh, branching logic based on provider selection
 
 ## Implementation Plan
 
