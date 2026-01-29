@@ -53,6 +53,7 @@ interface CompanyMember {
   email: string;
   role: string;
   hasGoogleConnection: boolean;
+  hasMicrosoftConnection: boolean;
 }
 
 interface LawmaticsMatter {
@@ -81,6 +82,8 @@ interface FormData {
   // Matter attachment fields
   lawmaticsMatterMode: "new" | "existing";
   lawmaticsExistingMatterId: string;
+  // Calendar provider selection
+  calendarProvider: "google" | "microsoft" | "";
 }
 
 const initialFormData: FormData = {
@@ -100,6 +103,7 @@ const initialFormData: FormData = {
   bookingRequestExpiresDays: 7,
   lawmaticsMatterMode: "new",
   lawmaticsExistingMatterId: "",
+  calendarProvider: "",
 };
 
 export default function RequestNew() {
@@ -199,20 +203,28 @@ export default function RequestNew() {
       
       if (usersError) throw usersError;
 
-      // Fetch calendar connections to determine who has Google connected
-      const { data: connections } = await supabase
+      // Fetch Google calendar connections
+      const { data: googleConnections } = await supabase
         .from("calendar_connections")
         .select("user_id")
         .eq("provider", "google");
 
-      const connectedUserIds = new Set((connections || []).map(c => c.user_id));
+      // Fetch Microsoft calendar connections
+      const { data: microsoftConnections } = await supabase
+        .from("calendar_connections")
+        .select("user_id")
+        .eq("provider", "microsoft");
+
+      const googleConnectedUserIds = new Set((googleConnections || []).map(c => c.user_id));
+      const microsoftConnectedUserIds = new Set((microsoftConnections || []).map(c => c.user_id));
 
       const members: CompanyMember[] = (users || []).map(u => ({
         id: u.id,
         name: u.name,
         email: u.email,
         role: u.role,
-        hasGoogleConnection: connectedUserIds.has(u.id),
+        hasGoogleConnection: googleConnectedUserIds.has(u.id),
+        hasMicrosoftConnection: microsoftConnectedUserIds.has(u.id),
       }));
 
       return members;
@@ -267,6 +279,8 @@ export default function RequestNew() {
           search_window_days_used: formData.searchWindowDays,
           status: "Proposed",
           created_by_user_id: internalUser?.id || null,
+          // Calendar provider selection (null = auto-detect/use available)
+          calendar_provider: formData.calendarProvider || null,
           // google_calendar_id will be determined from host's selected calendar at confirm time
         })
         .select("id")
@@ -390,11 +404,18 @@ export default function RequestNew() {
     formData.participantUserIds.includes(m.id)
   ) || [];
 
-  // Check if any selected participant has no Google connection
-  const participantsWithoutGoogle = [
-    ...(hostMember && !hostMember.hasGoogleConnection ? [hostMember] : []),
-    ...selectedParticipants.filter((p) => !p.hasGoogleConnection),
+  // Check if any selected participant has no connection for the selected provider
+  const selectedProvider = formData.calendarProvider || "google";
+  const participantsWithoutCalendar = [
+    ...(hostMember && (selectedProvider === "google" ? !hostMember.hasGoogleConnection : !hostMember.hasMicrosoftConnection) ? [hostMember] : []),
+    ...selectedParticipants.filter((p) => selectedProvider === "google" ? !p.hasGoogleConnection : !p.hasMicrosoftConnection),
   ];
+
+  // Check if any participant has both providers connected (to show provider selection)
+  const allSelectedParticipants = hostMember ? [hostMember, ...selectedParticipants] : selectedParticipants;
+  const anyHasBothProviders = allSelectedParticipants.some(p => p.hasGoogleConnection && p.hasMicrosoftConnection);
+  const allHaveGoogle = allSelectedParticipants.every(p => p.hasGoogleConnection);
+  const allHaveMicrosoft = allSelectedParticipants.every(p => p.hasMicrosoftConnection);
 
   // Success state
   if (createdToken) {
@@ -784,11 +805,26 @@ export default function RequestNew() {
                             <div className="flex items-center gap-2">
                               <span>{member.name}</span>
                               <span className="text-muted-foreground text-xs">({member.email})</span>
-                              {!member.hasGoogleConnection && (
-                                <Badge variant="outline" className="text-xs bg-status-warning/10 text-status-warning border-status-warning/30">
-                                  No Calendar
-                                </Badge>
-                              )}
+                              <div className="flex gap-1">
+                                {member.hasGoogleConnection ? (
+                                  <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/30">
+                                    Google
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs bg-muted text-muted-foreground border-muted">
+                                    ✗ Google
+                                  </Badge>
+                                )}
+                                {member.hasMicrosoftConnection ? (
+                                  <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-600 border-blue-500/30">
+                                    Outlook
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs bg-muted text-muted-foreground border-muted">
+                                    ✗ Outlook
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
                           </SelectItem>
                         ))}
@@ -838,11 +874,23 @@ export default function RequestNew() {
                             <Label htmlFor={`participant-${member.id}`} className="font-normal cursor-pointer flex items-center gap-2 flex-1">
                               <span>{member.name}</span>
                               <span className="text-muted-foreground text-xs">({member.email})</span>
-                              {!member.hasGoogleConnection && (
-                                <Badge variant="outline" className="text-xs bg-status-warning/10 text-status-warning border-status-warning/30">
-                                  No Calendar
-                                </Badge>
-                              )}
+                              <div className="flex gap-1">
+                                {member.hasGoogleConnection && (
+                                  <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/30">
+                                    Google
+                                  </Badge>
+                                )}
+                                {member.hasMicrosoftConnection && (
+                                  <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-600 border-blue-500/30">
+                                    Outlook
+                                  </Badge>
+                                )}
+                                {!member.hasGoogleConnection && !member.hasMicrosoftConnection && (
+                                  <Badge variant="outline" className="text-xs bg-status-warning/10 text-status-warning border-status-warning/30">
+                                    No Calendar
+                                  </Badge>
+                                )}
+                              </div>
                             </Label>
                           </div>
                         ))
@@ -850,14 +898,57 @@ export default function RequestNew() {
                   </div>
                 </div>
 
-                {/* Warning for participants without Google connection */}
-                {participantsWithoutGoogle.length > 0 && (
+                {/* Calendar Provider Selection - only show if any participant has both providers */}
+                {anyHasBothProviders && formData.hostUserId && (
+                  <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-4 h-4 text-muted-foreground" />
+                      <Label className="font-medium">Calendar Provider</Label>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Select which calendar service to use for event creation and availability checking.
+                    </p>
+                    <Select
+                      value={formData.calendarProvider || (allHaveGoogle ? "google" : allHaveMicrosoft ? "microsoft" : "google")}
+                      onValueChange={(v) => updateForm({ calendarProvider: v as "google" | "microsoft" })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select calendar provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="google">
+                          <div className="flex items-center gap-2">
+                            <span>Google Calendar</span>
+                            {!allHaveGoogle && (
+                              <Badge variant="outline" className="text-xs bg-status-warning/10 text-status-warning border-status-warning/30">
+                                Some missing
+                              </Badge>
+                            )}
+                          </div>
+                        </SelectItem>
+                        <SelectItem value="microsoft">
+                          <div className="flex items-center gap-2">
+                            <span>Microsoft Outlook</span>
+                            {!allHaveMicrosoft && (
+                              <Badge variant="outline" className="text-xs bg-status-warning/10 text-status-warning border-status-warning/30">
+                                Some missing
+                              </Badge>
+                            )}
+                          </div>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Warning for participants without calendar connection for selected provider */}
+                {participantsWithoutCalendar.length > 0 && (
                   <div className="flex items-start gap-2 p-3 rounded-md bg-status-warning/10 border border-status-warning/30">
                     <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
                     <div className="text-sm">
                       <p className="font-medium text-status-warning">Calendar availability may be incomplete</p>
                       <p className="text-muted-foreground mt-1">
-                        The following participants don't have Google Calendar connected: {participantsWithoutGoogle.map(p => p.name).join(", ")}. 
+                        The following participants don't have {selectedProvider === "google" ? "Google Calendar" : "Microsoft Outlook"} connected: {participantsWithoutCalendar.map(p => p.name).join(", ")}. 
                         Their availability won't be checked automatically.
                       </p>
                     </div>
@@ -1065,12 +1156,12 @@ export default function RequestNew() {
                   </div>
                 </div>
                 
-                {participantsWithoutGoogle.length > 0 && (
+                {participantsWithoutCalendar.length > 0 && (
                   <div className="flex items-start gap-2 p-3 rounded-md bg-status-warning/10 border border-status-warning/30">
                     <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
                     <div className="text-sm">
                       <p className="text-muted-foreground">
-                        Some participants don't have Google Calendar connected. Their availability won't be checked.
+                        Some participants don't have {selectedProvider === "google" ? "Google Calendar" : "Microsoft Outlook"} connected. Their availability won't be checked.
                       </p>
                     </div>
                   </div>

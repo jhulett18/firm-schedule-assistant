@@ -361,6 +361,48 @@ export type Database = {
           },
         ]
       }
+      meeting_microsoft_events: {
+        Row: {
+          created_at: string
+          id: string
+          meeting_id: string
+          microsoft_calendar_id: string
+          microsoft_event_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          meeting_id: string
+          microsoft_calendar_id: string
+          microsoft_event_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          meeting_id?: string
+          microsoft_calendar_id?: string
+          microsoft_event_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meeting_microsoft_events_meeting_id_fkey"
+            columns: ["meeting_id"]
+            isOneToOne: false
+            referencedRelation: "meetings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meeting_microsoft_events_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_types: {
         Row: {
           active: boolean
@@ -397,6 +439,9 @@ export type Database = {
       meetings: {
         Row: {
           booking_request_id: string | null
+          calendar_provider:
+            | Database["public"]["Enums"]["calendar_provider"]
+            | null
           client_email: string | null
           company_id: string | null
           created_at: string
@@ -433,6 +478,9 @@ export type Database = {
         }
         Insert: {
           booking_request_id?: string | null
+          calendar_provider?:
+            | Database["public"]["Enums"]["calendar_provider"]
+            | null
           client_email?: string | null
           company_id?: string | null
           created_at?: string
@@ -469,6 +517,9 @@ export type Database = {
         }
         Update: {
           booking_request_id?: string | null
+          calendar_provider?:
+            | Database["public"]["Enums"]["calendar_provider"]
+            | null
           client_email?: string | null
           company_id?: string | null
           created_at?: string
